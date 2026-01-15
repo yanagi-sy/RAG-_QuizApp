@@ -7,7 +7,7 @@ from pydantic import BaseModel
 class Citation(BaseModel):
     """引用情報"""
     source: str
-    page: int
+    page: int | None  # PDFならページ番号、txtならnull
     quote: str
 
 

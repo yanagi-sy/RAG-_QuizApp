@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.settings import settings
-from app.routers import ask, quiz, judge, health, docs
+from app.routers import ask, quiz, judge, health, docs, search
 
 app = FastAPI(
     title="RAG Quiz App API",
@@ -33,6 +33,7 @@ app.include_router(ask.router, prefix="/ask", tags=["ask"])
 app.include_router(quiz.router, prefix="/quiz", tags=["quiz"])
 app.include_router(judge.router, prefix="/judge", tags=["judge"])
 app.include_router(docs.router, prefix="/docs", tags=["docs"])
+app.include_router(search.router, prefix="/search", tags=["search"])
 
 
 @app.get("/")

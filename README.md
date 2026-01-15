@@ -96,9 +96,13 @@ rag-quiz-app/
 │   │   ├── routers/        # APIルーター
 │   │   │   ├── health.py   # GET /health
 │   │   │   ├── ask.py       # POST /ask
+│   │   │   ├── search.py    # POST /search
 │   │   │   ├── quiz.py      # POST /quiz
 │   │   │   ├── judge.py     # POST /judge
 │   │   │   └── docs.py      # GET /docs/summary
+│   │   ├── search/          # 検索機能
+│   │   │   ├── index.py     # 検索インデックス（キーワード検索）
+│   │   │   └── ngram.py     # 2-gram検索（日本語対応）
 │   │   ├── schemas/         # リクエスト/レスポンススキーマ
 │   │   │   ├── ask.py
 │   │   │   ├── quiz.py
@@ -159,7 +163,8 @@ rag-quiz-app/
 - `GET /health` - サーバーの稼働状況確認
 
 ### QA
-- `POST /ask` - 質問を送信し、回答を取得
+- `POST /ask` - 質問を送信し、回答を取得（検索実装済み、LLM未統合）
+- `POST /search` - チャンクを検索（キーワード検索＋2-gramフォールバック）
 
 ### Quiz
 - `POST /quiz` - クイズを生成
@@ -176,6 +181,17 @@ rag-quiz-app/
 - **PDF処理**: PyMuPDFを使用してテキスト抽出（スキャン画像は対象外）
 - **チャンク分割**: 文字数に応じて自動的にチャンクサイズを調整
 - **エラーログ**: 読み込めないPDFはログに記録（スキャンPDF等の検出）
+
+## 検索機能
+
+現在実装済みの検索機能：
+
+- **キーワード検索**: スペース区切り＋部分文字列マッチング
+- **2-gram検索**: 日本語クエリ対応のフォールバック検索（キーワード検索で0件の場合に自動適用）
+- **検索エンドポイント**: `POST /search` で検索結果を直接取得可能
+- **QA統合**: `POST /ask` で検索結果を基に引用を表示（LLM統合は未実装）
+
+日本語クエリ（スペース無し）でも検索可能です。例：`{"query":"機種依存文字"}` で検索できます。
 
 ## 開発メモ
 

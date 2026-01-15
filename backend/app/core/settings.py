@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     # CORS設定
     cors_origins: List[str] = ["http://localhost:3000"]
 
-    # ドキュメントディレクトリ
-    docs_dir: str = "docs"
+    # ドキュメントディレクトリ（リポジトリルートからの相対パス）
+    docs_dir: str = "manuals"
 
     # 将来のGEMINI APIキー（未使用）
     # gemini_api_key: str = ""

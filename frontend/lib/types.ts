@@ -61,7 +61,7 @@ export function toApiError(error: unknown): ApiError {
 // Citation型
 export interface Citation {
   source: string;
-  page: number;
+  page: number | null; // PDFならページ番号、txtならnull
   quote: string;
 }
 

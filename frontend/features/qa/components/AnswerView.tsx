@@ -65,11 +65,9 @@ export default function AnswerView({
         </div>
       </div>
 
-      {result.citations && result.citations.length > 0 && (
-        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-4 sm:p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-3">
-            根拠（最大5件）
-          </h2>
+      <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-4 sm:p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-3">根拠</h2>
+        {result.citations && result.citations.length > 0 ? (
           <div className="space-y-3">
             {result.citations.slice(0, 5).map((citation: Citation, index: number) => (
               <div
@@ -77,7 +75,8 @@ export default function AnswerView({
                 className="p-3 bg-gray-50 rounded-xl border border-gray-100"
               >
                 <div className="text-xs font-medium text-gray-500 mb-1">
-                  {citation.source} (p.{citation.page})
+                  {citation.source}
+                  {citation.page !== null && ` (p.${citation.page})`}
                 </div>
                 <div className="text-sm text-gray-700 whitespace-pre-wrap break-words">
                   {citation.quote}
@@ -85,8 +84,12 @@ export default function AnswerView({
               </div>
             ))}
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="text-sm text-gray-500">
+            根拠は見つかりませんでした
+          </div>
+        )}
+      </div>
     </div>
   );
 }

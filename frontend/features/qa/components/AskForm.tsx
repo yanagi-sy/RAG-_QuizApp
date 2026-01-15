@@ -46,7 +46,7 @@ export default function AskForm({ onSubmit, loading = false, apiError }: AskForm
             if (error) setError(null);
           }}
           rows={6}
-          className="w-full px-4 py-3 border border-gray-300 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-base disabled:opacity-50 disabled:cursor-not-allowed"
+          className="w-full px-4 py-3 border border-gray-300 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none text-base text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
           placeholder="質問を入力してください..."
           disabled={loading}
         />
