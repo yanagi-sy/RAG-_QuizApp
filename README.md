@@ -26,7 +26,7 @@ RAG（Retrieval-Augmented Generation）を使ったQAとクイズアプリケー
 
 ### LLM
 - **MVP**: Ollama（ローカル実行）
-- **将来**: Gemini API（移行予定）
+- **完成形**: Gemini API（移行予定）
 
 ## 前提条件
 
@@ -34,7 +34,7 @@ RAG（Retrieval-Augmented Generation）を使ったQAとクイズアプリケー
 - Node.js 18以上
 - npm または yarn
 
-## 環境構築手順
+## 環境構築＆起動手順
 
 ### Backend
 
@@ -53,6 +53,11 @@ cp .env.example .env
 
 # サーバーを起動
 uvicorn app.main:app --reload --port 8000
+```
+
+起動後、以下で動作確認：
+```bash
+curl http://localhost:8000/health
 ```
 
 ### Frontend
@@ -74,37 +79,73 @@ npm run dev
 
 ```
 rag-quiz-app/
-├── backend/                 # FastAPIバックエンド
+├── .cursor/                # Cursorプロジェクトルール
+│   └── rules/              # ルールファイル（命名規則・開発方針）
+├── .gitignore              # Git除外設定
+├── backend/                # FastAPIバックエンド
 │   ├── app/
 │   │   ├── core/           # 設定・エラーハンドリング
+│   │   │   ├── errors.py   # エラー定義
+│   │   │   └── settings.py # 設定管理
 │   │   ├── docs/           # ドキュメント読み込み・チャンク分割
+│   │   │   ├── loader.py   # txt/pdf読み込み
+│   │   │   ├── chunker.py  # LEN戦略で分割
+│   │   │   └── models.py   # Document/Chunk型
 │   │   ├── quiz/           # クイズ用in-memoryストア
-│   │   └── routers/        # APIルーター
-│   ├── .venv/              # Python仮想環境
-│   ├── requirements.txt    # Python依存パッケージ
-│   └── .env.example        # 環境変数テンプレート
+│   │   │   └── store.py    # quiz_id管理
+│   │   ├── routers/        # APIルーター
+│   │   │   ├── health.py   # GET /health
+│   │   │   ├── ask.py       # POST /ask
+│   │   │   ├── quiz.py      # POST /quiz
+│   │   │   ├── judge.py     # POST /judge
+│   │   │   └── docs.py      # GET /docs/summary
+│   │   ├── schemas/         # リクエスト/レスポンススキーマ
+│   │   │   ├── ask.py
+│   │   │   ├── quiz.py
+│   │   │   ├── judge.py
+│   │   │   └── common.py   # 共通型（Citation等）
+│   │   └── main.py          # FastAPIアプリケーション
+│   └── requirements.txt     # Python依存パッケージ
 ├── frontend/               # Next.jsフロントエンド
 │   ├── app/                # App Routerページ
+│   │   ├── layout.tsx      # 共通レイアウト（ヘッダー）
+│   │   ├── page.tsx        # QAトップ（/）
+│   │   └── quiz/
+│   │       └── page.tsx     # クイズ画面（/quiz）
 │   ├── features/           # 機能別コンポーネント
-│   │   ├── qa/            # QA機能
-│   │   └── quiz/          # クイズ機能
+│   │   ├── qa/             # QA機能
+│   │   │   ├── QAPage.tsx
+│   │   │   ├── useAsk.ts   # QA用カスタムフック
+│   │   │   └── components/
+│   │   │       ├── AskForm.tsx
+│   │   │       ├── AnswerView.tsx
+│   │   │       └── RetrievalSlider.tsx
+│   │   └── quiz/           # クイズ機能
+│   │       ├── QuizPage.tsx
+│   │       ├── useQuiz.ts  # クイズ用カスタムフック
+│   │       └── components/
+│   │           ├── DifficultyPicker.tsx
+│   │           ├── QuizCard.tsx
+│   │           └── JudgeButtons.tsx
 │   ├── lib/                # 共通ライブラリ
-│   ├── package.json        # Node.js依存パッケージ
-│   └── .env.example        # 環境変数テンプレート
-└── docs/                   # 設計書・ドキュメント
-    ├── 01_要件定義書.md
-    ├── 02_基本設計書.md
-    ├── 03_API設計書.md
-    └── 04_詳細設計書.md
+│   │   ├── api.ts          # APIクライアント
+│   │   └── types.ts        # 型定義
+│   └── package.json        # Node.js依存パッケージ
+├── docs/                   # 設計書・ドキュメント
+│   ├── 01_要件定義書.md
+│   ├── 02_基本設計書.md
+│   ├── 03_API設計書.md
+│   └── 04_詳細設計書.md
+└── manuals/                # RAG取り込み対象（txt/pdf）
+    └── sample.txt          # サンプルドキュメント
 ```
 
-## 起動後の確認URL
+## 確認URL
 
 ### Backend
-- **APIサーバー**: http://localhost:8000
 - **ヘルスチェック**: http://localhost:8000/health
 - **APIドキュメント**: http://localhost:8000/docs
-- **ルートエンドポイント**: http://localhost:8000/
+- **APIサーバー**: http://localhost:8000
 
 ### Frontend
 - **開発サーバー**: http://localhost:3000
@@ -128,11 +169,12 @@ rag-quiz-app/
 
 ## ドキュメント取り込み
 
-`docs/` ディレクトリ（プロジェクトルート）に `.txt` または `.pdf` ファイルを配置すると、自動的に読み込まれます。
+`manuals/` ディレクトリ（プロジェクトルート）に `.txt` または `.pdf` ファイルを配置すると、自動的に読み込まれます。
 
 - **サマリー確認**: `GET /docs/summary`
 - **PDF処理**: PyMuPDFを使用してテキスト抽出（スキャン画像は対象外）
 - **チャンク分割**: 文字数に応じて自動的にチャンクサイズを調整
+- **エラーログ**: 読み込めないPDFはログに記録（スキャンPDF等の検出）
 
 ## 開発メモ
 
