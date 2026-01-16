@@ -198,13 +198,85 @@ rag-quiz-app/
 - **チャンク分割**: 文字数に応じて自動的にチャンクサイズを調整（LEN戦略）
 - **エラーログ**: 読み込めないPDFはログに記録（スキャンPDF等の検出）
 - **自動インデックス構築**: サーバー起動時に`manuals/`配下のドキュメントを自動的にChromaDBにインデックス化
+- **観測性強化**: 起動時にDOCS_DIR実パス、読み込みファイル一覧（txt/pdf別）、PDF抽出テキスト長、Chroma投入チャンクのsource分布をログ出力
+
+### manuals/ のファイル追加・編集時の反映手順
+
+**重要**: `manuals/` にファイルを追加または編集した場合、ChromaDBの再構築が必要です。
+
+1. **サーバーを停止**（Ctrl+C）
+
+2. **ChromaDBを削除して再構築**:
+   ```bash
+   # ChromaDBディレクトリを削除（CHROMA_DIR=backend/.chroma 前提）
+   rm -rf backend/.chroma
+   
+   # サーバーを起動（起動時に自動的にインデックスが再構築される）
+   cd backend
+   source .venv/bin/activate  # 仮想環境が有効な場合
+   uvicorn app.main:app --reload --port 8000
+   ```
+
+3. **反映確認の最短手順**:
+   ```bash
+   # 1. ヘルスチェック
+   curl http://localhost:8000/health
+   
+   # 2. 追加ファイルにしかない単語で質問して、citations[].source に追加ファイル名が出ることを確認
+   curl -X POST http://localhost:8000/ask \
+     -H "Content-Type: application/json" \
+     -d '{"question":"追加ファイルにしかない単語"}'
+   # レスポンスの citations[].source に追加したファイル名が含まれることを確認
+   ```
+
+**注意**: `backend/.chroma` ディレクトリはgit管理対象外です（`.gitignore`で除外）。ローカルのChromaDBデータは各環境で独立して管理されます。
+
+### PDFが参照されない場合の確認手順
+
+PDFファイルが回答に参照されない場合、以下の手順で原因を特定できます：
+
+1. **起動ログで読み込み状況を確認**:
+   - `PDF読み込み: <ファイル名> - Xページ, テキスト合計: Y文字` が表示されることを確認
+   - テキスト合計が0文字の場合、画像PDF（スキャンPDF）の可能性があります
+   - `Chroma投入チャンクのsource分布` にPDFファイル名が含まれ、チャンク数が0でないことを確認
+
+2. **ChromaDB内のsource分布を確認**:
+   ```bash
+   # Pythonで確認スクリプト
+   python3 -c "
+   from app.rag.vectorstore import get_vectorstore, inspect_collection_sources
+   from app.core.settings import settings
+   collection = get_vectorstore(settings.chroma_dir)
+   source_counts = inspect_collection_sources(collection)
+   print('ChromaDB内のsource分布:')
+   for source, count in sorted(source_counts.items()):
+       print(f'  {source}: {count}チャンク')
+   "
+   ```
+
+3. **PDF固有語で検索**:
+   ```bash
+   curl -X POST http://localhost:8000/ask \
+     -H "Content-Type: application/json" \
+     -d '{"question":"PDFにしかない単語", "debug": true}' | jq '.citations[].source'
+   ```
 
 ### RAGインデックス動作確認
 
 1. **インデックス作成の確認**:
    - サーバー起動時に `build_index()` が自動実行されます
-   - ログに "RAGインデックス作成完了" が表示されることを確認
+   - ログに以下の情報が表示されます:
+     - `DOCS_DIR実パス: ... (exists=True)` - ドキュメントディレクトリの実パス
+     - `読み込み対象ファイル: X件 - [...]` - 読み込み対象のファイル一覧
+     - `PDF読み込み: <ファイル名> - Xページ, テキスト合計: Y文字` - PDF読み込み結果
+     - `ドキュメント読み込み完了: TXT=Xファイル(...), PDF=Yファイル(...)` - txt/pdf別の読み込み結果
+     - `Chroma投入チャンクのsource分布: {...}` - 各ファイルごとのチャンク数
+     - `RAGインデックス作成完了: doc_count=X, chunk_count=Y` - 最終結果
    - 既にインデックスがある場合は "インデックスは既に存在します" と表示されます
+   - **PDFが参照されない場合**: ログで以下を確認
+     - PDFファイル名が「読み込み成功PDFファイル」に含まれているか
+     - PDFのテキスト合計が0文字でないか（画像PDFの可能性）
+     - 「Chroma投入チャンクのsource分布」にPDFが含まれ、チャンク数が0でないか
 
 2. **`/ask` エンドポイントでcitations確認**:
    ```bash
@@ -216,7 +288,7 @@ rag-quiz-app/
    - `citations[].quote` が最大400文字であることを確認（`len(citation.quote)` で確認可能）
    - コレクションが空の場合は、ログに警告 "Chroma collection is empty. Run build_index first." が出力されます
 
-3. **CHANGED: ChromaDB再生成手順（documents保存形式変更時）**:
+3. **CHANGED: ChromaDB再生成手順（documents保存形式変更時、manuals/ファイル追加・編集時）**:
    ```bash
    # 1. サーバーを停止（Ctrl+C）
    

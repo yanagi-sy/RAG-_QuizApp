@@ -45,11 +45,17 @@ app.include_router(search.router, prefix="/search", tags=["search"])
 @app.on_event("startup")  # NEW: 起動時にインデックス作成
 async def startup_event():
     """起動時の処理（インデックス作成）"""
-    # NEW: CHROMA_DIRの実パスをログ出力（観測性強化）
+    # CHANGED: CHROMA_DIRとDOCS_DIRの実パスをログ出力（観測性強化）
     from pathlib import Path
-    repo_root = Path(__file__).parent.parent.parent
-    chroma_path = repo_root / settings.chroma_dir
-    logger.info(f"CHROMA_DIR実パス: {chroma_path.absolute()}")
+    from app.docs.loader import _find_repo_root
+    
+    # CHANGED: repo_rootは_find_repo_root()を使って統一
+    repo_root = _find_repo_root()
+    chroma_path = (repo_root / settings.chroma_dir).resolve()
+    docs_path = (repo_root / settings.docs_dir).resolve()
+    
+    logger.info(f"CHROMA_DIR実パス: {chroma_path} (exists={chroma_path.exists()})")
+    logger.info(f"DOCS_DIR実パス: {docs_path} (exists={docs_path.exists()})")
     
     try:
         # /docs/summary と同じタイミングで実行

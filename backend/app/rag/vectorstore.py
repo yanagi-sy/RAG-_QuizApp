@@ -28,9 +28,11 @@ def get_vectorstore(chroma_dir: str) -> chromadb.Collection:
     Raises:
         KeyError: ChromaDBのDB互換問題が発生した場合（'_type'キーエラー）
     """
-    # リポジトリルートを取得
-    repo_root = Path(__file__).parent.parent.parent.parent
-    chroma_path = repo_root / chroma_dir
+    # CHANGED: リポジトリルートの計算を統一（loader._find_repo_root()を使う）
+    from app.docs.loader import _find_repo_root
+    
+    repo_root = _find_repo_root()
+    chroma_path = (repo_root / chroma_dir).resolve()  # CHANGED: 絶対パスに解決
     
     # ディレクトリを作成（存在しない場合）
     chroma_path.mkdir(parents=True, exist_ok=True)
@@ -131,3 +133,38 @@ def get_collection_count(collection: chromadb.Collection) -> int:
         チャンク数
     """
     return collection.count()
+
+
+def inspect_collection_sources(collection: chromadb.Collection) -> dict[str, int]:
+    """
+    ChromaDBコレクション内のsource分布を取得（デバッグ用）
+    
+    Args:
+        collection: ChromaDBコレクション
+        
+    Returns:
+        source名をキー、チャンク数を値とした辞書
+    """
+    # NEW: 全データを取得してsource分布を集計
+    try:
+        # コレクションの全件数を取得
+        total_count = collection.count()
+        
+        if total_count == 0:
+            return {}
+        
+        # 全データを取得（件数が多い場合は注意）
+        # get()で全件取得（where条件なし）
+        results = collection.get(
+            limit=total_count  # 最大件数を指定（通常は問題ないが、大量データの場合は注意）
+        )
+        
+        # sourceごとに集計
+        from collections import Counter
+        sources = [metadata.get("source", "unknown") for metadata in (results.get("metadatas") or [])]
+        source_counts = Counter(sources)
+        
+        return dict(source_counts)
+    except Exception as e:
+        logger.warning(f"source分布の取得に失敗しました: {type(e).__name__}: {e}")
+        return {}

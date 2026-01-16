@@ -97,6 +97,11 @@ def build_index() -> None:
             metadatas=metadatas,
         )
         
+        # NEW: sourceごとのチャンク数をログ出力（PDFが参照されない原因調査用）
+        from collections import Counter
+        source_counts = Counter([chunk.source for chunk in all_chunks])
+        logger.info(f"Chroma投入チャンクのsource分布: {dict(source_counts)}")
+        
         # ログ出力
         doc_count = len(documents)
         chunk_count = len(all_chunks)

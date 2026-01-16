@@ -44,16 +44,24 @@ def load_pdf_file(file_path: Path) -> List[Document]:
         Documentのリスト（ページ単位）
     """
     documents = []
+    total_text_len = 0
+    empty_pages = 0
+    
     try:
         doc = fitz.open(file_path)
-        for page_num in range(len(doc)):
+        total_pages = len(doc)
+        
+        for page_num in range(total_pages):
             page = doc[page_num]
             text = page.get_text()
+            text_len = len(text.strip()) if text else 0
 
-            # テキストが抽出できない（スキャン画像）場合はスキップ
-            if not text or len(text.strip()) == 0:
+            # NEW: ページごとのテキスト長を記録
+            if text_len == 0:
+                empty_pages += 1
                 continue
 
+            total_text_len += text_len
             documents.append(
                 Document(
                     source=file_path.name,
@@ -62,6 +70,26 @@ def load_pdf_file(file_path: Path) -> List[Document]:
                 )
             )
         doc.close()
+        
+        # NEW: PDF読み込み結果をログ出力（抽出テキスト長、ページ数）
+        if total_text_len == 0:
+            logger.warning(
+                f"PDFからテキストが抽出できませんでした（画像PDFの可能性）: {file_path.name} "
+                f"(全{total_pages}ページ、抽出テキスト=0文字)"
+            )
+        elif empty_pages > 0:
+            logger.info(
+                f"PDF読み込み: {file_path.name} - "
+                f"抽出成功: {len(documents)}ページ/{total_pages}ページ, "
+                f"テキスト合計: {total_text_len}文字, "
+                f"空ページ: {empty_pages}ページ（スキャン画像の可能性）"
+            )
+        else:
+            logger.info(
+                f"PDF読み込み: {file_path.name} - "
+                f"{len(documents)}ページ, テキスト合計: {total_text_len}文字"
+            )
+            
     except Exception as e:
         # PDF読み込みエラーはログに記録してスキップ
         logger.warning(f"PDF読み込みエラー（スキップ）: {file_path.name} - {type(e).__name__}: {str(e)}")
@@ -72,24 +100,27 @@ def load_pdf_file(file_path: Path) -> List[Document]:
 
 def _find_repo_root() -> Path:
     """
-    リポジトリルートを取得する
-
+    リポジトリルートを取得する（backend/app/docs/loader.py から4階層上）
+    
     Returns:
-        リポジトリルートのPathオブジェクト
+        リポジトリルートのPathオブジェクト（絶対パス）
     """
-    # 現在のファイル（backend/app/docs/loader.py）の絶対パスから開始
+    # CHANGED: 現在のファイル（backend/app/docs/loader.py）から4階層上でrepo_root
+    # loader.py -> docs/ -> app/ -> backend/ -> repo_root
     current_file = Path(__file__).resolve()
+    repo_root = current_file.parent.parent.parent.parent
     
-    # 親ディレクトリを辿ってリポジトリルートを探す
-    # リポジトリルートの目印: backend/ ディレクトリが存在する
-    for parent in current_file.parents:
-        backend_dir = parent / "backend"
-        if backend_dir.exists() and backend_dir.is_dir():
-            # backend/ の親がリポジトリルート
-            return parent
+    # 検証: backend/ディレクトリが存在するか確認
+    backend_dir = repo_root / "backend"
+    if not backend_dir.exists() or not backend_dir.is_dir():
+        # フォールバック: parentsを辿ってbackend/を探す
+        for parent in current_file.parents:
+            backend_check = parent / "backend"
+            if backend_check.exists() and backend_check.is_dir():
+                repo_root = parent
+                break
     
-    # 見つからない場合は、従来の方法（4階層上）をフォールバック
-    return current_file.parent.parent.parent.parent
+    return repo_root.resolve()  # CHANGED: 絶対パスで返す
 
 
 def load_documents(docs_dir: str) -> List[Document]:
@@ -104,19 +135,40 @@ def load_documents(docs_dir: str) -> List[Document]:
     """
     documents = []
     
-    # リポジトリルートを取得
+    # CHANGED: リポジトリルートを取得し、docs_dirを絶対パスに解決
     repo_root = _find_repo_root()
-    docs_path = repo_root / docs_dir
+    docs_path = (repo_root / docs_dir).resolve()
+    
+    # NEW: docs_absパスをログ出力（観測性強化）
+    logger.info(f"DOCS_DIR実パス: {docs_path} (exists={docs_path.exists()})")
 
     if not docs_path.exists():
         logger.warning(f"ドキュメントディレクトリが存在しません: {docs_path}")
         return documents
+    
+    # NEW: 読み込むファイル一覧をログ出力（最低ファイル名数）
+    txt_files = list(docs_path.glob("*.txt"))
+    pdf_files = list(docs_path.glob("*.pdf"))
+    file_names = [f.name for f in txt_files + pdf_files]
+    # ファイル数が多い場合は先頭5件だけ表示
+    if len(file_names) > 5:
+        file_names_display = file_names[:5] + [f"... (他{len(file_names) - 5}件)"]
+    else:
+        file_names_display = file_names
+    logger.info(f"読み込み対象ファイル: {len(file_names)}件 - {file_names_display}")
 
     # .txt ファイルを読み込む
+    loaded_txt_files = []
+    loaded_pdf_files = []
+    txt_doc_count = 0
+    pdf_doc_count = 0
+    
     for txt_file in docs_path.glob("*.txt"):
         try:
             doc = load_txt_file(txt_file)
             documents.append(doc)
+            loaded_txt_files.append(txt_file.name)
+            txt_doc_count += 1
         except Exception:
             # 読み込みエラーは無視
             continue
@@ -130,10 +182,24 @@ def load_documents(docs_dir: str) -> List[Document]:
                 logger.warning(f"PDFからテキストが抽出できませんでした（スキップ）: {pdf_file.name}")
             else:
                 documents.extend(pdf_docs)
+                loaded_pdf_files.append(pdf_file.name)
+                pdf_doc_count += len(pdf_docs)
         except Exception as e:
             # 予期しないエラーはログに記録
             logger.error(f"PDF処理中にエラーが発生しました（スキップ）: {pdf_file.name} - {type(e).__name__}: {str(e)}")
             continue
+    
+    # NEW: 読み込み完了ファイル数（txt/pdf別）をログ出力
+    logger.info(
+        f"ドキュメント読み込み完了: "
+        f"TXT={len(loaded_txt_files)}ファイル({txt_doc_count}ドキュメント), "
+        f"PDF={len(loaded_pdf_files)}ファイル({pdf_doc_count}ドキュメント), "
+        f"合計={len(documents)}ドキュメント"
+    )
+    if loaded_txt_files:
+        logger.info(f"読み込み成功TXTファイル: {loaded_txt_files}")
+    if loaded_pdf_files:
+        logger.info(f"読み込み成功PDFファイル: {loaded_pdf_files}")
 
     return documents
 
