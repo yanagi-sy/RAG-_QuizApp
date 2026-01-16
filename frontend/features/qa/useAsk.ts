@@ -10,7 +10,7 @@ interface UseAskResult {
   loading: boolean;
   error: ApiError | null;
   result: AskResponse | null;
-  submit: (question: string, retrieval?: { semantic: number; keyword: number }) => Promise<void>;
+  submit: (question: string, retrieval?: { semantic_weight: number }) => Promise<void>;  // CHANGED: semantic_weightのみ
   retry: () => Promise<void>;
   reset: () => void;
 }
@@ -20,11 +20,11 @@ export function useAsk(): UseAskResult {
   const [error, setError] = useState<ApiError | null>(null);
   const [result, setResult] = useState<AskResponse | null>(null);
   const [lastQuestion, setLastQuestion] = useState<string | null>(null);
-  const [lastRetrieval, setLastRetrieval] = useState<{ semantic: number; keyword: number } | undefined>(undefined);
+  const [lastRetrieval, setLastRetrieval] = useState<{ semantic_weight: number } | undefined>(undefined);  // CHANGED: semantic_weightのみ
 
   const submit = async (
     question: string,
-    retrieval?: { semantic: number; keyword: number }
+    retrieval?: { semantic_weight: number }  // CHANGED: semantic_weightのみ
   ) => {
     setLastQuestion(question);
     setLastRetrieval(retrieval);

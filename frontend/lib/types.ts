@@ -69,8 +69,7 @@ export interface Citation {
 export interface AskRequest {
   question: string;
   retrieval?: {
-    semantic: number;
-    keyword: number;
+    semantic_weight: number;  // CHANGED: semantic_weightのみ（keyword_weightはbackendで計算）
   };
 }
 

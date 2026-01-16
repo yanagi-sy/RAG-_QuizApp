@@ -93,9 +93,9 @@ async function fetchApi<T>(
  */
 export async function askQuestion(
   question: string,
-  retrieval?: { semantic: number; keyword: number }
+  retrieval?: { semantic_weight: number }  // CHANGED: semantic_weightのみ
 ): Promise<{ answer: string; citations: Array<{ source: string; page: number; quote: string }> }> {
-  const body: { question: string; retrieval?: { semantic: number; keyword: number } } = {
+  const body: { question: string; retrieval?: { semantic_weight: number } } = {  // CHANGED: semantic_weightのみ
     question,
   };
   if (retrieval) {

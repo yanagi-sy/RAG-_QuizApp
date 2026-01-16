@@ -11,10 +11,14 @@ export default function QAPage() {
   const { loading, error, result, submit, retry } = useAsk();
 
   const handleSubmit = (question: string) => {
-    // RetrievalSliderの値を使ってretrievalを計算
-    const semantic = retrievalValue;
-    const keyword = 1 - retrievalValue;
-    submit(question, { semantic, keyword });
+    // CHANGED: semantic_weightを0.0〜1.0に正規化・clampしてから送信
+    // retrievalValueが0〜100の場合は/100、0〜1の場合はそのまま、最後に0〜1にclamp
+    let semanticWeight = retrievalValue;
+    if (semanticWeight > 1.0) {
+      semanticWeight = semanticWeight / 100;
+    }
+    semanticWeight = Math.max(0.0, Math.min(1.0, semanticWeight));
+    submit(question, { semantic_weight: semanticWeight });
   };
 
   // INVALID_INPUTの場合はAnswerViewにerrorを渡さない（AskFormで表示するため）
