@@ -354,14 +354,38 @@ PDFファイルが回答に参照されない場合、以下の手順で原因�
 - **重複排除**: 同一ID（source, page, chunk_index）とquote先頭60文字で重複排除
 - **デバッグ機能**: `debug=true`を指定すると、レスポンスに詳細なdebug情報が含まれます
   - `collection_count`, `candidate_k`, `rerank_n`, `top_k`: 候補数決定の詳細
-  - `semantic_hits_count`, `keyword_hits_count`, `merged_count`: 各段階のヒット数
+  - **段階別カウント**（0件化する地点の特定用）:
+    - `semantic_before_filter`, `semantic_after_filter`: semantic検索のフィルタ前後の件数
+    - `keyword_before_filter`, `keyword_after_filter`: keyword検索のフィルタ前後の件数
+    - `merged_count`: RRFマージ後の件数
+    - `post_rerank_count`: リランキング後の件数
+    - `after_threshold_count`: 閾値フィルタ通過後の件数
+    - `final_citations_count`: 最終的なcitationsの件数
+    - `zero_reason`: 0件になった理由（例: "all_candidates_removed_by_rerank_threshold"）
   - `pre_rerank`: リランキング前の上位候補（source, rrf_score, rank_sem, rank_kw）
   - `post_rerank`: リランキング後のスコア（source, rerank_score）
   - `final_selected_sources`: 最終的に選ばれたドキュメント
+  - **source_filter対応**:
+    - `allowed_sources`: 検索対象のsource一覧（source_filter指定時）
+    - `semantic_sources_before_unique`, `keyword_sources_before_unique`: フィルタ前の候補source一覧
+    - Unicode正規化対応により、日本語ファイル名でも正しくフィルタリング可能
 
 ### QA統合
 - `POST /ask`でハイブリッド検索結果を基にLLMで回答生成
 - Ollama停止時でも`citations`を返す（フォールバック）
+- **source_filter対応**: リクエストに`source_ids`を指定して特定の資料のみを検索対象にできます
+  - Unicode正規化により、日本語ファイル名でも正しく動作
+  - デバッグ情報で各段階のフィルタ結果を確認可能
+
+### Quiz統合
+- `POST /quiz/generate`でハイブリッド検索結果を基にLLMでクイズを生成
+- **救済ロジック**: 単独資料選択時にリランク閾値で全落ちした場合でも、次善の根拠を採用してクイズ生成可能
+  - `citations == 0` の場合、post_rerankから先頭N件（デフォルト2件）を自動採用
+  - `/ask` の検索品質・挙動には一切影響なし
+  - debug情報で救済ロジックの使用状況を確認可能:
+    - `quiz_fallback_used`: true（救済使用）
+    - `quiz_fallback_reason`: "citations_zero_after_threshold"
+    - `quiz_fallback_selected`: 採用した引用のリスト
 
 ## LLM統合
 
@@ -388,6 +412,10 @@ RERANK_SCORE_THRESHOLD=-1.5    # 絶対値閾値（基本品質保証）
 RERANK_SCORE_GAP_THRESHOLD=6.0 # トップとの差分閾値（普遍的な品質管理）
 RERANK_BATCH_SIZE=8            # バッチサイズ
 RRF_K=20                       # RRF順位融合のKパラメータ（小さいほど上位重視）
+
+# Quiz救済ロジック
+QUIZ_FALLBACK_TOP_N=2          # Quiz生成時にcitationsが0件の場合、post_rerankから採用する最低件数
+
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3
 OLLAMA_TIMEOUT_SEC=30
@@ -425,6 +453,11 @@ curl -X POST http://localhost:8000/ask \
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"question":"機種依存文字が禁止なのはなぜ？", "retrieval": {"semantic_weight": 0.7}, "debug": true}' | jq '.debug'
+
+# /quiz/generate で単独資料のクイズ生成テスト（debug=trueで段階別カウント確認）
+curl -X POST http://localhost:8000/quiz/generate \
+  -H "Content-Type: application/json" \
+  -d '{"level":"beginner","count":3,"source_ids":["sample.txt"],"debug":true}' | jq '.debug'
 ```
 
 **Hybrid Retrieval動作確認（Ollama停止時）**:

@@ -115,6 +115,13 @@ class Settings(BaseSettings):
         alias="RRF_K",
         description="RRF（順位融合）のKパラメータ（小さいほど上位重視）"
     )
+    
+    # Quiz救済ロジック設定
+    quiz_fallback_top_n: int = Field(
+        default=2,
+        alias="QUIZ_FALLBACK_TOP_N",
+        description="Quiz生成時にcitationsが0件の場合、post_rerankから採用する最低件数"
+    )
 
     # Ollama設定（環境変数名を明示的に指定して事故防止）
     ollama_base_url: str = Field(

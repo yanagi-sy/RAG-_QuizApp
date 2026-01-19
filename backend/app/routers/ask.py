@@ -4,6 +4,7 @@ QA (Ask) APIルーター
 import asyncio
 import logging
 import re
+import unicodedata
 from typing import Dict, Tuple, List
 from fastapi import APIRouter
 
@@ -113,10 +114,17 @@ async def ask_question(request: AskRequest) -> AskResponse:
         answer = "予期しないエラーが発生しました。根拠を参照してください。"
 
     # レスポンスを返す
+    response_debug = None
+    if request.debug and debug_info:
+        response_debug = debug_info.copy()
+        # _post_rerank_with_textはquiz専用の内部情報なので、askのレスポンスからは削除
+        if "_post_rerank_with_text" in response_debug:
+            del response_debug["_post_rerank_with_text"]
+    
     return AskResponse(
         answer=answer,
         citations=citations,
-        debug=debug_info if request.debug else None,  # NEW: debug=trueの場合のみdebug情報を返す
+        debug=response_debug if request.debug else None,  # NEW: debug=trueの場合のみdebug情報を返す
     )
 
 
@@ -126,6 +134,7 @@ def _hybrid_retrieval(
     keyword_weight: float,
     top_k: int,
     include_debug: bool = False,
+    source_filter: list[str] | None = None,
 ) -> tuple[list[Citation], dict | None]:
     """
     Hybrid retrieval（RRF融合 + Cross-Encoderリランキング）でcitationsを作成
@@ -144,6 +153,7 @@ def _hybrid_retrieval(
         keyword_weight: keyword検索の重み（RRFの重み付けに使用）
         top_k: 最終的に返す件数
         include_debug: debug情報を含めるかどうか
+        source_filter: 検索対象のsourceリスト（Noneなら全資料対象）
         
     Returns:
         (Citationのリスト, debug情報の辞書またはNone)のタプル
@@ -151,9 +161,31 @@ def _hybrid_retrieval(
     # NEW: debug_infoを最初に初期化（常にタプルを返すことを保証）
     debug_info: dict | None = None
     
+    # NEW: source_filter をUnicode NFC正規化（日本語ファイル名の比較問題を回避）
+    if source_filter:
+        source_filter = [unicodedata.normalize("NFC", s) for s in source_filter]
+        logger.info(f"source_filter を NFC 正規化しました: {source_filter}")
+    
     # NEW: 候補数を総チャンク数から動的に決定
     collection = get_vectorstore(settings.chroma_dir)
-    collection_count = get_collection_count(collection)
+    
+    # NEW: source_filter がある場合は filtered_collection_count を計測
+    if source_filter:
+        # Chroma の where 条件で source を絞る
+        where_filter = {"source": {"$in": source_filter}}
+        try:
+            # filtered_collection_count を取得（Chroma の get() で件数確認）
+            filtered_results = collection.get(where=where_filter, limit=1)
+            # 実際の件数は直接取得できないため、全件取得して数える（効率は悪いが正確）
+            # または、通常の collection_count から推定
+            collection_count = get_collection_count(collection)  # 全体の件数
+            # フィルタ後の件数は search で確認（概算）
+            logger.info(f"source_filter が指定されました: {source_filter}")
+        except Exception as e:
+            logger.warning(f"filtered_collection_count の取得に失敗: {e}")
+            collection_count = get_collection_count(collection)
+    else:
+        collection_count = get_collection_count(collection)
     
     if collection_count == 0:
         logger.warning(f"Chroma collection is empty. Run build_index first.")
@@ -183,15 +215,49 @@ def _hybrid_retrieval(
     )
     
     # NEW: semantic検索（candidate_k件取得、順位を記録）
+    # まずフィルタなしで取得 → フィルタ適用して段階カウント
     semantic_results: Dict[Tuple[str, int, int], Tuple[str, int]] = {}  # key: (text, rank)
+    semantic_before_filter = 0
+    semantic_after_filter = 0
+    semantic_sources_before = []  # debug用: フィルタ前の source リスト
+    
     try:
         query_embedding = embed_query(query, model_name=settings.embedding_model)
-        documents, metadatas, distances = query_chunks(
+        
+        # CHANGED: まずフィルタなしで取得して before カウント
+        documents_all, metadatas_all, distances_all = query_chunks(
             collection=collection,
             query_embedding=query_embedding,
             top_k=candidate_k,
+            where_filter=None,  # フィルタなし
         )
+        semantic_before_filter = len(documents_all)
+        semantic_sources_before = [m.get("source", "") for m in metadatas_all]  # debug用
         
+        # source_filter がある場合はフィルタリング
+        if source_filter:
+            filtered_docs = []
+            filtered_metas = []
+            for i, (doc_text, metadata) in enumerate(zip(documents_all, metadatas_all)):
+                source = metadata.get("source", "")
+                # Unicode NFC正規化（日本語ファイル名の比較問題を回避）
+                source_normalized = unicodedata.normalize("NFC", source)
+                is_match = source_normalized in source_filter
+                
+                if is_match:
+                    filtered_docs.append(doc_text)
+                    filtered_metas.append(metadata)
+                
+            
+            documents = filtered_docs
+            metadatas = filtered_metas
+        else:
+            documents = documents_all
+            metadatas = metadatas_all
+        
+        semantic_after_filter = len(documents)
+        
+        # semantic_results に格納
         for rank, (doc_text, metadata) in enumerate(zip(documents, metadatas)):
             source = metadata.get("source", "")
             page = metadata.get("page", 0)
@@ -199,20 +265,45 @@ def _hybrid_retrieval(
             key = (source, page, chunk_index)
             semantic_results[key] = (doc_text, rank + 1)  # rank is 1-based
         
-        logger.info(f"semantic検索: {len(semantic_results)}件取得, distances_top3={distances[:3]}")
+        logger.info(
+            f"semantic検索: before_filter={semantic_before_filter}, "
+            f"after_filter={semantic_after_filter}, distances_top3={distances_all[:3]}"
+        )
     except Exception as e:
         logger.warning(f"Semantic検索に失敗: {type(e).__name__}: {e}")
     
     # NEW: keyword検索（candidate_k件取得、順位を記録）
     keyword_results: Dict[Tuple[str, int, int], Tuple[str, int]] = {}  # key: (text, rank)
+    keyword_before_filter = 0
+    keyword_after_filter = 0
+    keyword_sources_before = []  # debug用: フィルタ前の source リスト
+    
     try:
-        scored_chunks = search_chunks(query, k=candidate_k)
+        # CHANGED: まずフィルタなしで取得
+        scored_chunks_all = search_chunks(query, k=candidate_k, source_filter=None)
+        keyword_before_filter = len(scored_chunks_all)
+        keyword_sources_before = [chunk.source for chunk, _ in scored_chunks_all]  # debug用
         
+        # source_filter がある場合はフィルタリング
+        if source_filter:
+            scored_chunks = [
+                (chunk, score) for chunk, score in scored_chunks_all
+                if unicodedata.normalize("NFC", chunk.source) in source_filter
+            ]
+        else:
+            scored_chunks = scored_chunks_all
+        
+        keyword_after_filter = len(scored_chunks)
+        
+        # keyword_results に格納
         for rank, (chunk, raw_score) in enumerate(scored_chunks):
             key = (chunk.source, chunk.page, chunk.chunk_index)
             keyword_results[key] = (chunk.text, rank + 1)  # rank is 1-based
         
-        logger.info(f"keyword検索: {len(keyword_results)}件取得, top3_raw_scores={[s for _, s in scored_chunks[:3]]}")
+        logger.info(
+            f"keyword検索: before_filter={keyword_before_filter}, "
+            f"after_filter={keyword_after_filter}, top3_raw_scores={[s for _, s in scored_chunks[:3]]}"
+        )
     except Exception as e:
         logger.warning(f"Keyword検索に失敗: {type(e).__name__}: {e}")
     
@@ -254,6 +345,9 @@ def _hybrid_retrieval(
     citations = []
     pre_rerank_info = []  # debug用
     post_rerank_info = []  # debug用
+    post_rerank_with_text = []  # debug用: text含むrerank結果（quiz救済用）
+    post_rerank_count = 0  # debug用: rerank後の候補数
+    after_threshold_count = 0  # debug用: 閾値/差分フィルタ通過後の候補数
     
     if settings.rerank_enabled and len(sorted_rrf) > 0:
         # rerank_n件を取得
@@ -286,6 +380,8 @@ def _hybrid_retrieval(
                 batch_size=settings.rerank_batch_size,
             )
             
+            post_rerank_count = len(reranked)  # debug用: rerank後の候補数
+            
             # debug用: post_rerank情報を記録
             if include_debug:
                 for text, metadata, rerank_score in reranked:
@@ -296,17 +392,35 @@ def _hybrid_retrieval(
                         "rerank_score": round(rerank_score, 4),
                         "rrf_score": round(metadata["rrf_score"], 4),
                     })
+                    # quiz救済用: text含むrerank結果を保存
+                    post_rerank_with_text.append({
+                        "source": key[0],
+                        "page": key[1],
+                        "chunk_index": key[2],
+                        "text": text,
+                        "rerank_score": round(rerank_score, 4),
+                        "rrf_score": round(metadata["rrf_score"], 4),
+                    })
             
             # 上位top_k件をcitationsとして作成
             # NEW: 普遍的な品質管理（トップスコアとの相対的な差分）
             seen_quotes: set[Tuple[str, int, str]] = set()
             top_score = reranked[0][2] if len(reranked) > 0 else 0.0  # NEW: トップスコアを取得
+            threshold_passed = 0  # debug用: 閾値を通過した候補数（重複排除前）
             
             for text, metadata, rerank_score in reranked[:top_k * 3]:  # CHANGED: 閾値フィルタ分多めに取得
+                key = metadata["key"]
+                source, page, chunk_index = key
+                
+                # NEW: post_rerank 後の source フィルタ（念のため）
+                if source_filter and source not in source_filter:
+                    logger.info(f"post_rerank source フィルタで除外: source={source}")
+                    continue
+                
                 # NEW: 絶対値閾値でフィルタリング（基本品質保証）
                 if rerank_score < settings.rerank_score_threshold:
                     logger.info(
-                        f"Cross-Encoderスコア閾値（絶対値）で除外: source={metadata['key'][0]}, "
+                        f"Cross-Encoderスコア閾値（絶対値）で除外: source={source}, "
                         f"score={rerank_score:.4f} < {settings.rerank_score_threshold}"
                     )
                     continue
@@ -315,14 +429,14 @@ def _hybrid_retrieval(
                 score_gap = top_score - rerank_score
                 if score_gap > settings.rerank_score_gap_threshold:
                     logger.info(
-                        f"Cross-Encoderスコア差分で除外: source={metadata['key'][0]}, "
+                        f"Cross-Encoderスコア差分で除外: source={source}, "
                         f"top_score={top_score:.4f}, current_score={rerank_score:.4f}, "
                         f"gap={score_gap:.4f} > {settings.rerank_score_gap_threshold}"
                     )
                     continue
                 
-                key = metadata["key"]
-                source, page, chunk_index = key
+                # 閾値を通過
+                threshold_passed += 1
                 
                 # 重複排除（source, page, quote先頭60文字）
                 quote_prefix = text[:60].strip()
@@ -348,7 +462,12 @@ def _hybrid_retrieval(
                     if len(citations) >= top_k:
                         break
             
-            logger.info(f"Cross-Encoderリランキング: final_citations={len(citations)}")
+            after_threshold_count = threshold_passed  # debug用: 閾値通過数を記録
+            
+            logger.info(
+                f"Cross-Encoderリランキング: post_rerank={post_rerank_count}, "
+                f"after_threshold={after_threshold_count}, final_citations={len(citations)}"
+            )
             
         except Exception as e:
             logger.error(f"Cross-Encoderリランキングに失敗: {type(e).__name__}: {e}")
@@ -366,13 +485,49 @@ def _hybrid_retrieval(
             "candidate_k": candidate_k,
             "rerank_n": rerank_n,
             "top_k": top_k,
+            # 段階別カウント（新規追加）
+            "semantic_before_filter": semantic_before_filter,
+            "semantic_after_filter": semantic_after_filter,
+            "keyword_before_filter": keyword_before_filter,
+            "keyword_after_filter": keyword_after_filter,
+            "merged_count": len(rrf_results),
+            "post_rerank_count": post_rerank_count,
+            "after_threshold_count": after_threshold_count,
+            "final_citations_count": len(citations),
+            # 既存のカウント（互換性のため残す）
             "semantic_hits_count": len(semantic_results),
             "keyword_hits_count": len(keyword_results),
-            "merged_count": len(rrf_results),
+            # 詳細情報
             "pre_rerank": pre_rerank_info,
             "post_rerank": post_rerank_info,
             "final_selected_sources": [c.source for c in citations],
+            # quiz救済用（text含むrerank結果、通常のdebugレスポンスには含めない）
+            "_post_rerank_with_text": post_rerank_with_text,
         }
+        
+        # NEW: source_filter 関連のdebug情報
+        if source_filter:
+            debug_info["allowed_sources"] = source_filter
+            debug_info["filtered_collection_count"] = collection_count  # 概算
+            # フィルタ前の候補に含まれる source をユニーク表示（原因A特定用）
+            debug_info["semantic_sources_before_unique"] = sorted(set(semantic_sources_before))
+            debug_info["keyword_sources_before_unique"] = sorted(set(keyword_sources_before))
+        
+        # NEW: zero_reason（citations が 0 件の場合に理由を特定）
+        if len(citations) == 0:
+            reasons = []
+            if semantic_after_filter == 0 and keyword_after_filter == 0:
+                reasons.append("semantic_after_filter=0 and keyword_after_filter=0")
+            elif len(rrf_results) == 0:
+                reasons.append("merged_count=0")
+            elif post_rerank_count == 0:
+                reasons.append("post_rerank_count=0")
+            elif after_threshold_count == 0:
+                reasons.append("all_candidates_removed_by_rerank_threshold")
+            else:
+                reasons.append("merged_count>0 but final_citations_count=0 (dedup or other)")
+            
+            debug_info["zero_reason"] = " | ".join(reasons)
     
     return (citations, debug_info)
 
