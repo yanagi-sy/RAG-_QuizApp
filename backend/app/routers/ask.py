@@ -298,14 +298,26 @@ def _hybrid_retrieval(
                     })
             
             # 上位top_k件をcitationsとして作成
-            # NEW: rerank_score_thresholdでフィルタリング
+            # NEW: rerank_score_thresholdでフィルタリング + 1位とのスコア差でフィルタリング
             seen_quotes: set[Tuple[str, int, str]] = set()
+            top_score = reranked[0][2] if len(reranked) > 0 else 0.0  # 1位のスコア
+            
             for text, metadata, rerank_score in reranked[:top_k * 3]:  # CHANGED: 閾値フィルタ分多めに取得
-                # NEW: スコア閾値でフィルタリング
+                # NEW: 絶対閾値でフィルタリング
                 if rerank_score < settings.rerank_score_threshold:
                     logger.info(
                         f"Cross-Encoderスコア閾値で除外: source={metadata['key'][0]}, "
                         f"score={rerank_score:.4f} < {settings.rerank_score_threshold}"
+                    )
+                    continue
+                
+                # NEW: 1位とのスコア差でフィルタリング（1位を除く）
+                score_gap = top_score - rerank_score
+                if score_gap > settings.rerank_score_gap_threshold and rerank_score != top_score:
+                    logger.info(
+                        f"Cross-Encoderスコア差で除外: source={metadata['key'][0]}, "
+                        f"gap={score_gap:.4f} > {settings.rerank_score_gap_threshold} "
+                        f"(top={top_score:.4f}, current={rerank_score:.4f})"
                     )
                     continue
                 
