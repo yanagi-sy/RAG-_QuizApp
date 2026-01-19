@@ -345,7 +345,7 @@ PDFファイルが回答に参照されない場合、以下の手順で原因�
   - RRF_K=20で上位を重視、スコアの絶対的な品質を保持
 - **Cross-Encoderリランキング**: 上位rerank_n件を再スコアリング
   - モデル: `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`（多言語対応）
-  - スコア閾値: `RERANK_SCORE_THRESHOLD=-3.0`（これ以下は除外）
+  - スコア閾値: `RERANK_SCORE_THRESHOLD=-1.5`（これ以下は除外）
   - `RERANK_ENABLED=true/false`で有効/無効切り替え
 - **重み調整**: `retrieval.semantic_weight`（0.0-1.0、デフォルト0.7）でRRFの重み付けを調整
 - **重複排除**: 同一ID（source, page, chunk_index）とquote先頭60文字で重複排除
@@ -381,7 +381,7 @@ RERANK_MODEL=cross-encoder/mmarco-mMiniLMv2-L12-H384-v1  # 多言語対応
 RERANK_RATIO=0.3               # リランク対象数の割合
 RERANK_MIN_N=8                 # リランク対象数の最小値
 RERANK_MAX_N=12                # リランク対象数の最大値
-RERANK_SCORE_THRESHOLD=-3.0    # スコア閾値（これ以下は除外）
+RERANK_SCORE_THRESHOLD=-1.5    # スコア閾値（これ以下は除外）
 RERANK_BATCH_SIZE=8            # バッチサイズ
 RRF_K=20                       # RRF順位融合のKパラメータ（小さいほど上位重視）
 OLLAMA_BASE_URL=http://localhost:11434

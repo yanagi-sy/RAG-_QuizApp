@@ -96,7 +96,7 @@ class Settings(BaseSettings):
         description="リランク対象数の最大値"
     )
     rerank_score_threshold: float = Field(
-        default=-3.0,
+        default=-1.5,
         alias="RERANK_SCORE_THRESHOLD",
         description="Cross-Encoderスコア閾値（これ以下は除外）"
     )
