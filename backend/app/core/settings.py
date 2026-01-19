@@ -46,6 +46,11 @@ class Settings(BaseSettings):
         alias="KEYWORD_MIN_SCORE",
         description="キーワード検索の最小スコア閾値（ノイズ除去用）"
     )
+    semantic_min_threshold: float = Field(
+        default=0.3,
+        alias="SEMANTIC_MIN_THRESHOLD",
+        description="ハイブリッド検索時の最小semantic score閾値（これ以下はkeywordスコアに関わらず除外）"
+    )
 
     # Ollama設定（環境変数名を明示的に指定して事故防止）
     ollama_base_url: str = Field(

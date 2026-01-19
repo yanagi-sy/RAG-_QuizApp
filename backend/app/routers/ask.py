@@ -245,14 +245,28 @@ def _hybrid_retrieval(
         merged_results[key] = (text, final_score)
     
     # CHANGED: keyword結果をマージ（既存のkeyがあればスコアだけ加算、textは上書きしない）
+    # NEW: semantic最小閾値を適用（意味的に無関係なドキュメントを除外）
     for key, (text, score) in keyword_results.items():
         if key in merged_results:
             # 既存のtextを維持し、スコアだけ加算（semanticのtextを優先）
             existing_text, existing_score = merged_results[key]
             merged_results[key] = (existing_text, existing_score + keyword_weight * score)
         else:
-            # 新規追加
-            merged_results[key] = (text, keyword_weight * score)
+            # NEW: keyword結果のみの場合、semantic scoreが閾値未満なら除外
+            # semantic_resultsにないということは、semantic scoreが0または非常に低い
+            # この場合、keywordスコアが高くても意味的に無関係な可能性が高い
+            semantic_score = semantic_results.get(key, (None, 0.0))[1] if key in semantic_results else 0.0
+            
+            # semantic scoreが最小閾値以上の場合のみ追加
+            if semantic_score >= settings.semantic_min_threshold or keyword_weight >= 0.7:
+                # keyword_weight >= 0.7（つまりsemantic_weight <= 0.3）の場合は閾値を緩和
+                merged_results[key] = (text, keyword_weight * score)
+            else:
+                # semantic scoreが低すぎる場合は除外（ログ出力）
+                logger.info(
+                    f"keyword結果を除外（semantic score={semantic_score:.3f} < "
+                    f"閾値{settings.semantic_min_threshold}）: source={key[0]}, page={key[1]}"
+                )
     
     # NEW: スコア降順でソート
     sorted_results = sorted(
@@ -297,7 +311,8 @@ def _hybrid_retrieval(
     logger.info(
         f"hybrid retrieval: semantic_hits={semantic_hits}, "
         f"keyword_hits={keyword_hits}, merged_hits={merged_hits}, "
-        f"top3_scores={top3_scores}, final_citations={len(citations)}"
+        f"top3_scores={top3_scores}, final_citations={len(citations)}, "
+        f"semantic_min_threshold={settings.semantic_min_threshold}"
     )
     
     # CHANGED: debug情報を構築（include_debugがTrueの場合のみ、Falseの場合はNoneのまま）

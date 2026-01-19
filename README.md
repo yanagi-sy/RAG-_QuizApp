@@ -342,6 +342,9 @@ PDFファイルが回答に参照されない場合、以下の手順で原因�
   - `semantic_weight=0.0`: キーワード検索のみ
   - `semantic_weight=0.7`: 意味検索70%、キーワード検索30%
 - **スコア統合**: `final_score = semantic_weight * semantic_score + keyword_weight * keyword_score`
+- **セマンティック最小閾値**: keyword検索のみでヒットした結果も、`semantic_score < 0.3`なら除外（意味的に無関係なドキュメントを排除）
+  - 例: 「地震の時は？」で「110番」を含む強盗マニュアルがkeywordでヒットしても、semantic scoreが低ければ除外
+  - `SEMANTIC_MIN_THRESHOLD`で調整可能（デフォルト0.3）
 - **重複排除**: 同一ID（source, page, chunk_index）とquote先頭60文字で重複排除
 - **観測性**: ログに`semantic_hits`, `keyword_hits`, `merged_hits`, `top3_scores`を出力
 - **デバッグ機能**: `debug=true`を指定すると、レスポンスに`debug`フィールドが含まれます
@@ -363,6 +366,7 @@ PDFファイルが回答に参照されない場合、以下の手順で原因�
 ```env
 TOP_K=5                        # Semantic検索の取得件数
 KEYWORD_MIN_SCORE=2            # キーワード検索の最小スコア閾値（ノイズ除去）
+SEMANTIC_MIN_THRESHOLD=0.3     # ハイブリッド検索時の最小semantic score閾値
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3
 OLLAMA_TIMEOUT_SEC=30
