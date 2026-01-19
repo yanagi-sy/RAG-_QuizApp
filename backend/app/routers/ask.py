@@ -298,26 +298,26 @@ def _hybrid_retrieval(
                     })
             
             # 上位top_k件をcitationsとして作成
-            # NEW: rerank_score_thresholdでフィルタリング + 1位とのスコア差でフィルタリング
+            # NEW: 普遍的な品質管理（トップスコアとの相対的な差分）
             seen_quotes: set[Tuple[str, int, str]] = set()
-            top_score = reranked[0][2] if len(reranked) > 0 else 0.0  # 1位のスコア
+            top_score = reranked[0][2] if len(reranked) > 0 else 0.0  # NEW: トップスコアを取得
             
             for text, metadata, rerank_score in reranked[:top_k * 3]:  # CHANGED: 閾値フィルタ分多めに取得
-                # NEW: 絶対閾値でフィルタリング
+                # NEW: 絶対値閾値でフィルタリング（基本品質保証）
                 if rerank_score < settings.rerank_score_threshold:
                     logger.info(
-                        f"Cross-Encoderスコア閾値で除外: source={metadata['key'][0]}, "
+                        f"Cross-Encoderスコア閾値（絶対値）で除外: source={metadata['key'][0]}, "
                         f"score={rerank_score:.4f} < {settings.rerank_score_threshold}"
                     )
                     continue
                 
-                # NEW: 1位とのスコア差でフィルタリング（1位を除く）
+                # NEW: 相対的スコア差分でフィルタリング（普遍的な品質管理）
                 score_gap = top_score - rerank_score
-                if score_gap > settings.rerank_score_gap_threshold and rerank_score != top_score:
+                if score_gap > settings.rerank_score_gap_threshold:
                     logger.info(
-                        f"Cross-Encoderスコア差で除外: source={metadata['key'][0]}, "
-                        f"gap={score_gap:.4f} > {settings.rerank_score_gap_threshold} "
-                        f"(top={top_score:.4f}, current={rerank_score:.4f})"
+                        f"Cross-Encoderスコア差分で除外: source={metadata['key'][0]}, "
+                        f"top_score={top_score:.4f}, current_score={rerank_score:.4f}, "
+                        f"gap={score_gap:.4f} > {settings.rerank_score_gap_threshold}"
                     )
                     continue
                 

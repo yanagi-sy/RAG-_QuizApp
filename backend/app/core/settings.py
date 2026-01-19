@@ -98,12 +98,12 @@ class Settings(BaseSettings):
     rerank_score_threshold: float = Field(
         default=-1.5,
         alias="RERANK_SCORE_THRESHOLD",
-        description="Cross-Encoderスコア閾値（これ以下は除外）"
+        description="Cross-Encoderスコア閾値（絶対値、これ以下は除外）"
     )
     rerank_score_gap_threshold: float = Field(
-        default=3.0,
+        default=6.0,
         alias="RERANK_SCORE_GAP_THRESHOLD",
-        description="1位とのスコア差閾値（これ以上差があれば除外）"
+        description="トップスコアとの差分閾値（これ以上離れている候補は除外、普遍的な品質管理）"
     )
     rerank_batch_size: int = Field(
         default=8,
