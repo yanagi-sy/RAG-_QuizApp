@@ -9,6 +9,7 @@ from app.docs.loader import load_documents
 from app.docs.chunker import chunk_documents
 from app.docs.models import DocumentChunk
 from app.search.ngram import score as ngram_score
+from app.search.stopwords import remove_stopwords  # NEW
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ def search_chunks(query: str, k: int = 5) -> List[tuple[DocumentChunk, int]]:
 
 def _search_keyword(query: str, chunks: List[DocumentChunk], k: int) -> List[tuple[DocumentChunk, int]]:
     """
-    キーワード検索（既存の検索方法）
+    キーワード検索（改善版：ストップワード除去、最小スコア閾値）
     
     Args:
         query: 検索クエリ
@@ -91,10 +92,22 @@ def _search_keyword(query: str, chunks: List[DocumentChunk], k: int) -> List[tup
     Returns:
         (DocumentChunk, score)のリスト（score降順）
     """
-    # クエリをトークン化（スペース区切り）
-    query_tokens = query.split()
+    # CHANGED: クエリをトークン化してストップワードを除去
+    query_tokens_raw = query.split()
+    query_tokens = remove_stopwords(query_tokens_raw)  # NEW: ストップワード除去
+    
+    # NEW: ログ出力（観測性強化）
+    logger.info(
+        f"keyword検索開始: query='{query}', "
+        f"tokens_raw={query_tokens_raw}, "
+        f"tokens_filtered={query_tokens}"
+    )
+    
     # 全文一致チェック用
     query_lower = query.lower()
+    
+    # NEW: 最小スコア閾値（settingsから取得、調整可能）
+    MIN_SCORE_THRESHOLD = settings.keyword_min_score
     
     # 各chunkをスコアリング
     scored_chunks: List[tuple[DocumentChunk, int]] = []
@@ -103,32 +116,50 @@ def _search_keyword(query: str, chunks: List[DocumentChunk], k: int) -> List[tup
         text_lower = chunk.text.lower()
         score = 0
         
-        # 全文一致なら+3（高スコア）
+        # 全文一致なら+5（高スコア、CHANGED: 3→5に引き上げ）
         if query_lower in text_lower:
-            score += 3
+            score += 5
         
-        # トークン含有数をカウント（スペース区切りがある場合）
-        if len(query_tokens) > 1:
+        # CHANGED: ストップワード除去後のトークンで評価
+        if len(query_tokens) > 0:
+            matched_tokens = 0
             for token in query_tokens:
                 token_lower = token.lower()
-                if token_lower in text_lower:
-                    score += 1
+                if len(token_lower) >= 2 and token_lower in text_lower:  # NEW: 2文字以上のみ
+                    matched_tokens += 1
+                    score += 2  # CHANGED: トークンマッチは+2に強化
+            
+            # NEW: マッチ率ボーナス（全トークンの50%以上マッチした場合）
+            if len(query_tokens) > 0 and matched_tokens >= len(query_tokens) * 0.5:
+                score += 3
         
-        # 日本語対応：部分文字列マッチング（2文字以上の部分文字列をチェック）
-        if len(query) >= 2:
-            # クエリの部分文字列（2文字以上）が含まれているかチェック
-            for i in range(len(query) - 1):
-                substring = query[i:i+2].lower()
-                if substring in text_lower:
-                    score += 1
-                    break  # 1回見つかればOK
+        # CHANGED: 部分文字列マッチングは削除（ノイズが多いため）
+        # 代わりに、3文字以上のキーワードを抽出して評価
+        # クエリから3文字以上の連続文字列を抽出（日本語対応）
+        if len(query) >= 3:
+            # 3文字以上の部分文字列でマッチングを試みる
+            query_clean = query.replace(" ", "").replace("？", "").replace("?", "")
+            if len(query_clean) >= 3:
+                # 3文字単位でチェック（重要な単語のみ）
+                for i in range(len(query_clean) - 2):
+                    substring = query_clean[i:i+3].lower()
+                    if substring in text_lower:
+                        score += 1
+                        break  # 1回見つかればOK
         
-        # スコアが0より大きい場合のみ追加
-        if score > 0:
+        # CHANGED: 最小スコア閾値を適用（ノイズ除去）
+        if score >= MIN_SCORE_THRESHOLD:
             scored_chunks.append((chunk, score))
     
     # score降順でソート
     scored_chunks.sort(key=lambda x: x[1], reverse=True)
+    
+    # NEW: ログ出力（観測性強化）
+    logger.info(
+        f"keyword検索結果: total_hits={len(scored_chunks)}, "
+        f"top3_scores={[score for _, score in scored_chunks[:3]]}, "
+        f"min_threshold={MIN_SCORE_THRESHOLD}"
+    )
     
     # 上位k件を返す
     return scored_chunks[:k]

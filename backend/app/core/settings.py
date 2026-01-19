@@ -41,6 +41,11 @@ class Settings(BaseSettings):
         alias="TOP_K",
         description="Semantic検索の取得件数"
     )
+    keyword_min_score: int = Field(
+        default=2,
+        alias="KEYWORD_MIN_SCORE",
+        description="キーワード検索の最小スコア閾値（ノイズ除去用）"
+    )
 
     # Ollama設定（環境変数名を明示的に指定して事故防止）
     ollama_base_url: str = Field(
