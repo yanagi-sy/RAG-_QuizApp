@@ -98,7 +98,7 @@ async def ask_question(request: AskRequest) -> AskResponse:
 
         # LLMで回答生成
         answer = await asyncio.wait_for(
-            llm_client.generate(messages=messages),
+            llm_client.chat(messages=messages),
             timeout=settings.ollama_timeout_sec,
         )
 
