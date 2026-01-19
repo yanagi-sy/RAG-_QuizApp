@@ -298,8 +298,17 @@ def _hybrid_retrieval(
                     })
             
             # 上位top_k件をcitationsとして作成
+            # NEW: rerank_score_thresholdでフィルタリング
             seen_quotes: set[Tuple[str, int, str]] = set()
-            for text, metadata, rerank_score in reranked[:top_k * 2]:  # 重複排除のため多めに取得
+            for text, metadata, rerank_score in reranked[:top_k * 3]:  # CHANGED: 閾値フィルタ分多めに取得
+                # NEW: スコア閾値でフィルタリング
+                if rerank_score < settings.rerank_score_threshold:
+                    logger.info(
+                        f"Cross-Encoderスコア閾値で除外: source={metadata['key'][0]}, "
+                        f"score={rerank_score:.4f} < {settings.rerank_score_threshold}"
+                    )
+                    continue
+                
                 key = metadata["key"]
                 source, page, chunk_index = key
                 

@@ -86,14 +86,19 @@ class Settings(BaseSettings):
         description="リランク対象数の割合（candidate_k * ratio）"
     )
     rerank_min_n: int = Field(
-        default=10,
+        default=8,
         alias="RERANK_MIN_N",
         description="リランク対象数の最小値"
     )
     rerank_max_n: int = Field(
-        default=15,
+        default=12,
         alias="RERANK_MAX_N",
         description="リランク対象数の最大値"
+    )
+    rerank_score_threshold: float = Field(
+        default=-3.0,
+        alias="RERANK_SCORE_THRESHOLD",
+        description="Cross-Encoderスコア閾値（これ以下は除外）"
     )
     rerank_batch_size: int = Field(
         default=8,
