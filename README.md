@@ -335,23 +335,25 @@ PDFファイルが回答に参照されない場合、以下の手順で原因�
 - **インデックス自動構築**: サーバー起動時に`manuals/`配下のドキュメントを自動的にインデックス化
 - **根拠品質**: ChromaDBにはチャンク全文を保存し、APIレスポンス時に`quote`を最大400文字で切る（embeddingとdocumentsの整合性を保つ）
 
-### ハイブリッド検索（Hybrid Retrieval）
-- **`POST /ask`**: semantic検索とkeyword検索を組み合わせたハイブリッド検索
-- **重み調整**: `retrieval.semantic_weight`（0.0-1.0、デフォルト0.7）で検索比率を調整可能
-  - `semantic_weight=1.0`: 意味検索のみ
-  - `semantic_weight=0.0`: キーワード検索のみ
-  - `semantic_weight=0.7`: 意味検索70%、キーワード検索30%
-- **スコア統合**: `final_score = semantic_weight * semantic_score + keyword_weight * keyword_score`
-- **セマンティック最小閾値**: keyword検索のみでヒットした結果も、`semantic_score < 0.3`なら除外（意味的に無関係なドキュメントを排除）
-  - 例: 「地震の時は？」で「110番」を含む強盗マニュアルがkeywordでヒットしても、semantic scoreが低ければ除外
-  - `SEMANTIC_MIN_THRESHOLD`で調整可能（デフォルト0.3）
+### ハイブリッド検索（RRF + Cross-Encoder）
+- **`POST /ask`**: RRF順位融合 + Cross-Encoderリランキングによる高精度検索
+- **候補品質管理**: 総チャンク数から動的に候補数を決定
+  - `candidate_k = clamp(collection_count * 0.005, 20, 60)`
+  - `rerank_n = clamp(candidate_k * 0.3, 10, 15)`
+- **RRF（順位融合）**: min-max正規化を廃止し、順位ベースの融合
+  - `rrf_score = w_sem / (60 + rank_sem) + w_kw / (60 + rank_kw)`
+  - スコアの絶対的な品質を保持、混線（地震→強盗など）を削減
+- **Cross-Encoderリランキング**: 上位rerank_n件を再スコアリング
+  - モデル: `cross-encoder/ms-marco-MiniLM-L-6-v2`
+  - `RERANK_ENABLED=true/false`で有効/無効切り替え
+- **重み調整**: `retrieval.semantic_weight`（0.0-1.0、デフォルト0.7）でRRFの重み付けを調整
 - **重複排除**: 同一ID（source, page, chunk_index）とquote先頭60文字で重複排除
-- **観測性**: ログに`semantic_hits`, `keyword_hits`, `merged_hits`, `top3_scores`を出力
-- **デバッグ機能**: `debug=true`を指定すると、レスポンスに`debug`フィールドが含まれます
-  - `debug.semantic_weight`, `debug.keyword_weight`: 使用された重み
-  - `debug.semantic_hits`, `debug.keyword_hits`, `debug.merged_hits`: 検索結果件数
-  - `debug.top3_scores`: 上位3件の最終スコア
-  - `debug.collection_count`: ChromaDBコレクション内のチャンク数
+- **デバッグ機能**: `debug=true`を指定すると、レスポンスに詳細なdebug情報が含まれます
+  - `collection_count`, `candidate_k`, `rerank_n`, `top_k`: 候補数決定の詳細
+  - `semantic_hits_count`, `keyword_hits_count`, `merged_count`: 各段階のヒット数
+  - `pre_rerank`: リランキング前の上位候補（source, rrf_score, rank_sem, rank_kw）
+  - `post_rerank`: リランキング後のスコア（source, rerank_score）
+  - `final_selected_sources`: 最終的に選ばれたドキュメント
 
 ### QA統合
 - `POST /ask`でハイブリッド検索結果を基にLLMで回答生成
@@ -364,9 +366,22 @@ PDFファイルが回答に参照されない場合、以下の手順で原因�
 `.env` ファイルで以下を設定可能（デフォルト値あり）:
 
 ```env
-TOP_K=5                        # Semantic検索の取得件数
+TOP_K=5                        # 最終的に返す件数
 KEYWORD_MIN_SCORE=2            # キーワード検索の最小スコア閾値（ノイズ除去）
-SEMANTIC_MIN_THRESHOLD=0.3     # ハイブリッド検索時の最小semantic score閾値
+
+# 候補品質管理
+CANDIDATE_RATIO=0.005          # 候補数の割合
+CANDIDATE_MIN_K=20             # 候補数の最小値
+CANDIDATE_MAX_K=60             # 候補数の最大値
+
+# Cross-Encoderリランキング
+RERANK_ENABLED=true            # リランキング有効/無効
+RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+RERANK_RATIO=0.3               # リランク対象数の割合
+RERANK_MIN_N=10                # リランク対象数の最小値
+RERANK_MAX_N=15                # リランク対象数の最大値
+RERANK_BATCH_SIZE=8            # バッチサイズ
+RRF_K=60                       # RRF順位融合のKパラメータ
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3
 OLLAMA_TIMEOUT_SEC=30

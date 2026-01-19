@@ -4,6 +4,7 @@ QA (Ask) APIルーター
 import asyncio
 import logging
 import re
+from typing import Dict, Tuple, List
 from fastapi import APIRouter
 
 from app.core.errors import raise_invalid_input
@@ -16,6 +17,7 @@ from app.rag.vectorstore import get_collection_count
 from app.rag.vectorstore import get_vectorstore
 from app.rag.vectorstore import query_chunks
 from app.search.index import search_chunks  # NEW: keyword検索用
+from app.search.reranker import rerank_documents  # NEW: Cross-Encoder
 from app.llm.base import LLMInternalError
 from app.llm.base import LLMTimeoutError
 from app.llm.ollama import get_ollama_client
@@ -29,61 +31,50 @@ router = APIRouter()
 
 def normalize_question(question: str) -> str:
     """
-    質問文を検索用クエリに正規化する（最低限の処理）
-    
-    - 改行 → 空白
-    - 連続空白の圧縮
-    - strip
-    
+    質問文を正規化する
+
     Args:
-        question: 元の質問文
-        
+        question: 質問文
+
     Returns:
-        正規化された検索クエリ
+        正規化された質問文
     """
-    # 改行を空白に置換
-    normalized = question.replace('\n', ' ').replace('\r', ' ')
-    
-    # 連続スペースを1つにまとめ、strip
-    normalized = re.sub(r'\s+', ' ', normalized).strip()
-    
-    return normalized
+    # 余計な空白を削除
+    question = re.sub(r"\s+", " ", question).strip()
+    return question
 
 
 @router.post("", response_model=AskResponse)
 async def ask_question(request: AskRequest) -> AskResponse:
     """
-    質問を受け取り、回答を返す（hybrid retrieval実装）
+    質問を受け取り、回答を返す
 
-    - question: 必須。空文字列や空白のみの場合はINVALID_INPUTエラー
-    - retrieval: オプション。semantic_weight（0.0-1.0、デフォルト0.7）を指定可能
+    Args:
+        request: 質問リクエスト
+
+    Returns:
+        回答レスポンス
     """
-    # ローディング確認用の遅延
-    await asyncio.sleep(0.8)
+    # 質問文の検証
+    question = normalize_question(request.question)
+    if not question:
+        raise_invalid_input("質問文が空です")
 
-    # バリデーション: 空文字列や空白のみはエラー
-    if not request.question or not request.question.strip():
-        raise_invalid_input("questionは必須です。空文字列や空白のみは許可されません。")
-
-    # 質問文を正規化して検索用クエリに変換
-    search_query = normalize_question(request.question)
-    
-    # 正規化後のクエリが空の場合は元の質問文を使用
-    if not search_query:
-        search_query = request.question.strip()
-
-    # NEW: semantic_weightを取得（デフォルト0.7）
-    semantic_weight = 0.7
-    if request.retrieval is not None:
+    # 検索パラメータ
+    semantic_weight = 0.7  # デフォルト
+    if request.retrieval and request.retrieval.semantic_weight is not None:
         semantic_weight = request.retrieval.semantic_weight
+        # 0.0〜1.0にclamp
+        semantic_weight = max(0.0, min(1.0, semantic_weight))
+
     keyword_weight = 1.0 - semantic_weight
 
-    # CHANGED: Hybrid retrieval（semantic + keyword）でcitationsを作成
+    # CHANGED: Hybrid retrieval（RRF + Cross-Encoder）でcitationsを作成
     citations = []
     debug_info = None
     try:
         citations, debug_info = _hybrid_retrieval(
-            query=search_query,
+            query=question,
             semantic_weight=semantic_weight,
             keyword_weight=keyword_weight,
             top_k=settings.top_k,
@@ -91,43 +82,37 @@ async def ask_question(request: AskRequest) -> AskResponse:
         )
     except Exception as e:
         # Hybrid retrieval失敗時もログだけ出して続行（citationsは空リスト）
-        logger.warning(f"Hybrid retrievalに失敗しました: query='{search_query}', error={type(e).__name__}: {e}")
+        logger.warning(f"Hybrid retrievalに失敗しました: {type(e).__name__}: {e}")
 
-    # LLMで回答生成（retrieval-first）
+    # LLMで回答生成を試みる
+    answer = ""
     try:
-        # プロンプトを構築
-        messages = build_messages(request.question, citations)
-        
-        # Ollamaクライアントを取得して回答生成
-        ollama_client = get_ollama_client()
-        answer = await ollama_client.chat(messages)
-        
-        # 回答本文から番号参照を除去（根拠はcitationsで別表示されるため）  # CHANGED
-        # 除去対象: "(根拠12)" "（根拠12）" "根拠12" "参照12" など
-        answer = re.sub(r'[（(]?(根拠|参照)\d+[）)]?', '', answer)
-        # 除去後の連続空白を1つにまとめる
-        answer = re.sub(r'\s+', ' ', answer).strip()
-        
-        logger.info(f"回答生成成功: {len(answer)}文字")
-    
-    except (LLMTimeoutError, LLMInternalError) as e:
-        # LLM失敗時もHTTP 200で返す（citationsは必ず返す）
-        logger.warning(f"LLM呼び出し失敗: {type(e).__name__}: {e}")
-        
-        if len(citations) > 0:
-            answer = "回答生成に失敗しました。根拠情報のみ表示します。"
-        else:
-            answer = "関連する情報が見つかりませんでした。質問を言い換えて再度お試しください。"
-    
-    except Exception as e:
-        # 予期しないエラーも同じくHTTP 200で返す
-        logger.error(f"予期しないエラー: {type(e).__name__}: {e}")
-        
-        if len(citations) > 0:
-            answer = "回答生成に失敗しました。根拠情報のみ表示します。"
-        else:
-            answer = "関連する情報が見つかりませんでした。質問を言い換えて再度お試しください。"
+        # LLMクライアントを取得
+        llm_client = get_ollama_client()
 
+        # プロンプトを構築
+        messages = build_messages(
+            question=question,
+            citations=citations,
+        )
+
+        # LLMで回答生成
+        answer = await asyncio.wait_for(
+            llm_client.generate(messages=messages),
+            timeout=settings.ollama_timeout_sec,
+        )
+
+    except (LLMTimeoutError, asyncio.TimeoutError):
+        logger.warning("LLM回答生成がタイムアウトしました。citationsのみ返します。")
+        answer = "回答生成がタイムアウトしました。根拠を参照してください。"
+    except LLMInternalError as e:
+        logger.warning(f"LLM回答生成に失敗しました: {e}。citationsのみ返します。")
+        answer = "回答生成に失敗しました。根拠を参照してください。"
+    except Exception as e:
+        logger.error(f"予期しないエラー: {type(e).__name__}: {e}")
+        answer = "予期しないエラーが発生しました。根拠を参照してください。"
+
+    # レスポンスを返す
     return AskResponse(
         answer=answer,
         citations=citations,
@@ -140,157 +125,265 @@ def _hybrid_retrieval(
     semantic_weight: float,
     keyword_weight: float,
     top_k: int,
-    include_debug: bool = False,  # NEW: debug情報を含めるかどうか
+    include_debug: bool = False,
 ) -> tuple[list[Citation], dict | None]:
     """
-    Hybrid retrieval（semantic + keyword）でcitationsを作成
+    Hybrid retrieval（RRF融合 + Cross-Encoderリランキング）でcitationsを作成
+    
+    CHANGED: 従来のmin-max正規化+スコア加重和を廃止し、RRF順位融合+Cross-Encoderに変更
+    
+    パイプライン:
+    1. semantic/keyword検索でそれぞれcandidate_k件取得
+    2. RRF（順位融合）でマージ・ソート
+    3. 上位rerank_n件をCross-Encoderで再スコアリング
+    4. 最終top_k件をcitationsとして返す
     
     Args:
         query: 検索クエリ
-        semantic_weight: semantic検索の重み（0.0-1.0）
-        keyword_weight: keyword検索の重み（0.0-1.0）
-        top_k: 取得件数
+        semantic_weight: semantic検索の重み（RRFの重み付けに使用）
+        keyword_weight: keyword検索の重み（RRFの重み付けに使用）
+        top_k: 最終的に返す件数
         include_debug: debug情報を含めるかどうか
         
     Returns:
         (Citationのリスト, debug情報の辞書またはNone)のタプル
     """
-    from typing import Dict, Tuple
-    
-    # NEW: collection_countを取得（debug情報用）
-    collection_count = 0
-    
-    # CHANGED: debug_infoを最初に初期化（常にタプルを返すことを保証）
+    # NEW: debug_infoを最初に初期化（常にタプルを返すことを保証）
     debug_info: dict | None = None
     
-    # NEW: semantic検索（既存のChroma queryを使用）
-    semantic_results: Dict[Tuple[str, int, int], Tuple[str, float]] = {}
-    semantic_hits = 0
+    # NEW: 候補数を総チャンク数から動的に決定
+    collection = get_vectorstore(settings.chroma_dir)
+    collection_count = get_collection_count(collection)
+    
+    if collection_count == 0:
+        logger.warning(f"Chroma collection is empty. Run build_index first.")
+        return ([], debug_info)
+    
+    # candidate_k = clamp(round(collection_count * ratio), min_k, max_k)
+    candidate_k = max(
+        settings.candidate_min_k,
+        min(
+            settings.candidate_max_k,
+            round(collection_count * settings.candidate_ratio)
+        )
+    )
+    
+    # rerank_n = clamp(round(candidate_k * ratio), min_n, max_n)
+    rerank_n = max(
+        settings.rerank_min_n,
+        min(
+            settings.rerank_max_n,
+            round(candidate_k * settings.rerank_ratio)
+        )
+    )
+    
+    logger.info(
+        f"候補数決定: collection_count={collection_count}, "
+        f"candidate_k={candidate_k}, rerank_n={rerank_n}, top_k={top_k}"
+    )
+    
+    # NEW: semantic検索（candidate_k件取得、順位を記録）
+    semantic_results: Dict[Tuple[str, int, int], Tuple[str, int]] = {}  # key: (text, rank)
     try:
-        # 質問をEmbeddingに変換
         query_embedding = embed_query(query, model_name=settings.embedding_model)
-        
-        # ChromaDBから検索
-        collection = get_vectorstore(settings.chroma_dir)
-        
-        # コレクションの件数をチェック
-        collection_count = get_collection_count(collection)
-        if collection_count == 0:
-            logger.warning(
-                f"Chroma collection is empty. Run build_index first. chroma_dir={settings.chroma_dir}"
-            )
-        
         documents, metadatas, distances = query_chunks(
             collection=collection,
             query_embedding=query_embedding,
-            top_k=top_k * 2,  # マージ前に多めに取得
+            top_k=candidate_k,
         )
         
-        # distanceをscoreに変換（score = 1 - distance、0〜1にclamp）
-        semantic_scores = []
-        for dist in distances:
-            score = max(0.0, min(1.0, 1.0 - dist))  # 0〜1にclamp
-            semantic_scores.append(score)
-        
-        # semantic結果を辞書に格納（key: (source, page, chunk_index)）
-        for doc_text, metadata, score in zip(documents, metadatas, semantic_scores):
+        for rank, (doc_text, metadata) in enumerate(zip(documents, metadatas)):
             source = metadata.get("source", "")
             page = metadata.get("page", 0)
             chunk_index = metadata.get("chunk_index", 0)
             key = (source, page, chunk_index)
-            semantic_results[key] = (doc_text, score)
-            semantic_hits += 1
+            semantic_results[key] = (doc_text, rank + 1)  # rank is 1-based
         
-        # distances の先頭3件をログ出力（観測性）
-        if distances:
-            logger.info(f"semantic distances (top3): {distances[:3]}")
+        logger.info(f"semantic検索: {len(semantic_results)}件取得, distances_top3={distances[:3]}")
     except Exception as e:
-        logger.warning(f"Semantic検索に失敗しました: {type(e).__name__}: {e}")
+        logger.warning(f"Semantic検索に失敗: {type(e).__name__}: {e}")
     
-    # NEW: keyword検索（既存のsearch_chunksを使用）
-    keyword_results: Dict[Tuple[str, int, int], Tuple[str, float]] = {}
-    keyword_hits = 0
+    # NEW: keyword検索（candidate_k件取得、順位を記録）
+    keyword_results: Dict[Tuple[str, int, int], Tuple[str, int]] = {}  # key: (text, rank)
     try:
-        # keyword検索を実行（kを多めに取得）
-        scored_chunks = search_chunks(query, k=top_k * 2)
+        scored_chunks = search_chunks(query, k=candidate_k)
         
-        if len(scored_chunks) > 0:
-            # scoreを0〜1に正規化（min-max正規化）
-            scores = [score for _, score in scored_chunks]
-            if len(scores) > 0:
-                min_score = min(scores)
-                max_score = max(scores)
-                score_range = max_score - min_score
-                
-                # keyword結果を辞書に格納（key: (source, page, chunk_index)）
-                for chunk, raw_score in scored_chunks:
-                    # min-max正規化（0〜1に変換）
-                    if score_range > 0:
-                        normalized_score = (raw_score - min_score) / score_range
-                    else:
-                        normalized_score = 1.0 if raw_score > 0 else 0.0
-                    
-                    key = (chunk.source, chunk.page, chunk.chunk_index)
-                    keyword_results[key] = (chunk.text, normalized_score)
-                    keyword_hits += 1
+        for rank, (chunk, raw_score) in enumerate(scored_chunks):
+            key = (chunk.source, chunk.page, chunk.chunk_index)
+            keyword_results[key] = (chunk.text, rank + 1)  # rank is 1-based
+        
+        logger.info(f"keyword検索: {len(keyword_results)}件取得, top3_raw_scores={[s for _, s in scored_chunks[:3]]}")
     except Exception as e:
-        logger.warning(f"Keyword検索に失敗しました: {type(e).__name__}: {e}")
+        logger.warning(f"Keyword検索に失敗: {type(e).__name__}: {e}")
     
-    # NEW: 両者をマージ（同一IDで統合、final_score = w*semantic + (1-w)*keyword）
-    merged_results: Dict[Tuple[str, int, int], Tuple[str, float]] = {}
+    # NEW: RRF（Reciprocal Rank Fusion）でマージ
+    # rrf_score = w_sem / (RRF_K + rank_sem) + w_kw / (RRF_K + rank_kw)
+    rrf_results: Dict[Tuple[str, int, int], Tuple[str, float, int, int]] = {}  # key: (text, rrf_score, rank_sem, rank_kw)
     
-    # semantic結果をマージ
-    for key, (text, score) in semantic_results.items():
-        final_score = semantic_weight * score
-        merged_results[key] = (text, final_score)
+    all_keys = set(semantic_results.keys()) | set(keyword_results.keys())
     
-    # CHANGED: keyword結果をマージ（既存のkeyがあればスコアだけ加算、textは上書きしない）
-    # NEW: semantic最小閾値を適用（意味的に無関係なドキュメントを除外）
-    for key, (text, score) in keyword_results.items():
-        if key in merged_results:
-            # 既存のtextを維持し、スコアだけ加算（semanticのtextを優先）
-            existing_text, existing_score = merged_results[key]
-            merged_results[key] = (existing_text, existing_score + keyword_weight * score)
-        else:
-            # NEW: keyword結果のみの場合、semantic scoreが閾値未満なら除外
-            # semantic_resultsにないということは、semantic scoreが0または非常に低い
-            # この場合、keywordスコアが高くても意味的に無関係な可能性が高い
-            semantic_score = semantic_results.get(key, (None, 0.0))[1] if key in semantic_results else 0.0
-            
-            # semantic scoreが最小閾値以上の場合のみ追加
-            if semantic_score >= settings.semantic_min_threshold or keyword_weight >= 0.7:
-                # keyword_weight >= 0.7（つまりsemantic_weight <= 0.3）の場合は閾値を緩和
-                merged_results[key] = (text, keyword_weight * score)
-            else:
-                # semantic scoreが低すぎる場合は除外（ログ出力）
-                logger.info(
-                    f"keyword結果を除外（semantic score={semantic_score:.3f} < "
-                    f"閾値{settings.semantic_min_threshold}）: source={key[0]}, page={key[1]}"
-                )
+    for key in all_keys:
+        # textはsemanticを優先、なければkeywordから取得
+        text = semantic_results.get(key, (None, 0))[0] or keyword_results.get(key, (None, 0))[0]
+        
+        # rankを取得（ヒットしていない場合は大きな値）
+        rank_sem = semantic_results.get(key, (None, candidate_k + 100))[1]
+        rank_kw = keyword_results.get(key, (None, candidate_k + 100))[1]
+        
+        # RRFスコア計算
+        rrf_score = (
+            semantic_weight / (settings.rrf_k + rank_sem) +
+            keyword_weight / (settings.rrf_k + rank_kw)
+        )
+        
+        rrf_results[key] = (text, rrf_score, rank_sem, rank_kw)
     
-    # NEW: スコア降順でソート
-    sorted_results = sorted(
-        merged_results.items(),
-        key=lambda x: x[1][1],  # (text, score)のscoreでソート
+    # RRFスコア降順でソート
+    sorted_rrf = sorted(
+        rrf_results.items(),
+        key=lambda x: x[1][1],  # rrf_scoreでソート
         reverse=True
     )
     
-    # NEW: 重複排除（source, page, quote先頭60文字）とcitations作成
-    seen_quotes: set[Tuple[str, int, str]] = set()
-    citations = []
+    logger.info(
+        f"RRF融合: merged={len(rrf_results)}件, "
+        f"top3_rrf_scores={[score for _, (_, score, _, _) in sorted_rrf[:3]]}"
+    )
     
-    for (source, page, chunk_index), (text, final_score) in sorted_results[:top_k * 2]:
-        # quote先頭60文字で重複判定
+    # NEW: 上位rerank_n件をCross-Encoderで再スコアリング
+    citations = []
+    pre_rerank_info = []  # debug用
+    post_rerank_info = []  # debug用
+    
+    if settings.rerank_enabled and len(sorted_rrf) > 0:
+        # rerank_n件を取得
+        rerank_candidates = sorted_rrf[:rerank_n]
+        
+        # Cross-Encoder用のドキュメントリスト作成
+        documents_for_rerank = [
+            (text, {"key": key, "rrf_score": rrf_score, "rank_sem": rank_sem, "rank_kw": rank_kw})
+            for key, (text, rrf_score, rank_sem, rank_kw) in rerank_candidates
+        ]
+        
+        # debug用: pre_rerank情報を記録
+        if include_debug:
+            for key, (text, rrf_score, rank_sem, rank_kw) in rerank_candidates:
+                pre_rerank_info.append({
+                    "source": key[0],
+                    "page": key[1],
+                    "rrf_score": round(rrf_score, 4),
+                    "rank_sem": rank_sem,
+                    "rank_kw": rank_kw,
+                })
+        
+        try:
+            # Cross-Encoderで再スコアリング
+            reranked = rerank_documents(
+                query=query,
+                documents=documents_for_rerank,
+                model_name=settings.rerank_model,
+                top_n=None,  # 全件再スコアリング
+                batch_size=settings.rerank_batch_size,
+            )
+            
+            # debug用: post_rerank情報を記録
+            if include_debug:
+                for text, metadata, rerank_score in reranked:
+                    key = metadata["key"]
+                    post_rerank_info.append({
+                        "source": key[0],
+                        "page": key[1],
+                        "rerank_score": round(rerank_score, 4),
+                        "rrf_score": round(metadata["rrf_score"], 4),
+                    })
+            
+            # 上位top_k件をcitationsとして作成
+            seen_quotes: set[Tuple[str, int, str]] = set()
+            for text, metadata, rerank_score in reranked[:top_k * 2]:  # 重複排除のため多めに取得
+                key = metadata["key"]
+                source, page, chunk_index = key
+                
+                # 重複排除（source, page, quote先頭60文字）
+                quote_prefix = text[:60].strip()
+                quote_key = (source, page, quote_prefix)
+                
+                if quote_key not in seen_quotes:
+                    seen_quotes.add(quote_key)
+                    
+                    # pageの扱い：txtはnull、pdfは1以上をそのまま返す
+                    page_value = page if page is not None and page > 0 else None
+                    
+                    # quoteはAPIレスポンス時に最大400文字で切る
+                    quote = text[:400] if len(text) > 400 else text
+                    
+                    citations.append(
+                        Citation(
+                            source=source,
+                            page=page_value,
+                            quote=quote,
+                        )
+                    )
+                    
+                    if len(citations) >= top_k:
+                        break
+            
+            logger.info(f"Cross-Encoderリランキング: final_citations={len(citations)}")
+            
+        except Exception as e:
+            logger.error(f"Cross-Encoderリランキングに失敗: {type(e).__name__}: {e}")
+            # フォールバック: RRFの順位をそのまま使用
+            citations = _create_citations_from_rrf(sorted_rrf, top_k)
+    else:
+        # リランキング無効時: RRFの順位をそのまま使用
+        logger.info("Cross-Encoderリランキング無効: RRF順位を使用")
+        citations = _create_citations_from_rrf(sorted_rrf, top_k)
+    
+    # NEW: debug情報を構築
+    if include_debug:
+        debug_info = {
+            "collection_count": collection_count,
+            "candidate_k": candidate_k,
+            "rerank_n": rerank_n,
+            "top_k": top_k,
+            "semantic_hits_count": len(semantic_results),
+            "keyword_hits_count": len(keyword_results),
+            "merged_count": len(rrf_results),
+            "pre_rerank": pre_rerank_info,
+            "post_rerank": post_rerank_info,
+            "final_selected_sources": [c.source for c in citations],
+        }
+    
+    return (citations, debug_info)
+
+
+def _create_citations_from_rrf(
+    sorted_rrf: List[Tuple[Tuple[str, int, int], Tuple[str, float, int, int]]],
+    top_k: int,
+) -> list[Citation]:
+    """
+    RRF結果からcitationsを作成（リランキングなしのフォールバック）
+    
+    Args:
+        sorted_rrf: RRFでソート済みの結果
+        top_k: 取得件数
+        
+    Returns:
+        Citationのリスト
+    """
+    citations = []
+    seen_quotes: set[Tuple[str, int, str]] = set()
+    
+    for key, (text, rrf_score, rank_sem, rank_kw) in sorted_rrf[:top_k * 2]:
+        source, page, chunk_index = key
+        
+        # 重複排除
         quote_prefix = text[:60].strip()
         quote_key = (source, page, quote_prefix)
         
         if quote_key not in seen_quotes:
             seen_quotes.add(quote_key)
             
-            # pageの扱い：txtはnull、pdfは1以上をそのまま返す
             page_value = page if page is not None and page > 0 else None
-            
-            # CHANGED: quoteはAPIレスポンス時に最大400文字で切る（DBには全文保持、表示都合で短縮）
             quote = text[:400] if len(text) > 400 else text
             
             citations.append(
@@ -301,31 +394,7 @@ def _hybrid_retrieval(
                 )
             )
             
-            # top_k件に達したら終了
             if len(citations) >= top_k:
                 break
     
-    # NEW: 観測性ログ（semantic_hits/keyword_hits/merged_hits、top3のスコア一覧）
-    merged_hits = len(merged_results)
-    top3_scores = [score for _, (_, score) in sorted_results[:3]]
-    logger.info(
-        f"hybrid retrieval: semantic_hits={semantic_hits}, "
-        f"keyword_hits={keyword_hits}, merged_hits={merged_hits}, "
-        f"top3_scores={top3_scores}, final_citations={len(citations)}, "
-        f"semantic_min_threshold={settings.semantic_min_threshold}"
-    )
-    
-    # CHANGED: debug情報を構築（include_debugがTrueの場合のみ、Falseの場合はNoneのまま）
-    if include_debug:
-        debug_info = {
-            "semantic_weight": semantic_weight,
-            "keyword_weight": keyword_weight,
-            "semantic_hits": semantic_hits,
-            "keyword_hits": keyword_hits,
-            "merged_hits": merged_hits,
-            "top3_scores": top3_scores,
-            "collection_count": collection_count,
-        }
-    
-    # CHANGED: 常にタプルを返す（debug_infoはNoneまたはdict）
-    return citations, debug_info
+    return citations

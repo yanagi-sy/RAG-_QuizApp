@@ -51,6 +51,60 @@ class Settings(BaseSettings):
         alias="SEMANTIC_MIN_THRESHOLD",
         description="ハイブリッド検索時の最小semantic score閾値（これ以下はkeywordスコアに関わらず除外）"
     )
+    
+    # NEW: 候補品質管理（動的候補数）
+    candidate_ratio: float = Field(
+        default=0.005,
+        alias="CANDIDATE_RATIO",
+        description="候補数の割合（collection_count * ratio）"
+    )
+    candidate_min_k: int = Field(
+        default=20,
+        alias="CANDIDATE_MIN_K",
+        description="候補数の最小値"
+    )
+    candidate_max_k: int = Field(
+        default=60,
+        alias="CANDIDATE_MAX_K",
+        description="候補数の最大値"
+    )
+    
+    # NEW: Cross-Encoder リランキング
+    rerank_enabled: bool = Field(
+        default=True,
+        alias="RERANK_ENABLED",
+        description="Cross-Encoderリランキングを有効化"
+    )
+    rerank_model: str = Field(
+        default="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        alias="RERANK_MODEL",
+        description="Cross-Encoderモデル名"
+    )
+    rerank_ratio: float = Field(
+        default=0.3,
+        alias="RERANK_RATIO",
+        description="リランク対象数の割合（candidate_k * ratio）"
+    )
+    rerank_min_n: int = Field(
+        default=10,
+        alias="RERANK_MIN_N",
+        description="リランク対象数の最小値"
+    )
+    rerank_max_n: int = Field(
+        default=15,
+        alias="RERANK_MAX_N",
+        description="リランク対象数の最大値"
+    )
+    rerank_batch_size: int = Field(
+        default=8,
+        alias="RERANK_BATCH_SIZE",
+        description="Cross-Encoderバッチサイズ"
+    )
+    rrf_k: int = Field(
+        default=60,
+        alias="RRF_K",
+        description="RRF（順位融合）のKパラメータ"
+    )
 
     # Ollama設定（環境変数名を明示的に指定して事故防止）
     ollama_base_url: str = Field(
