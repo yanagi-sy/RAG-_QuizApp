@@ -341,10 +341,10 @@ PDFファイルが回答に参照されない場合、以下の手順で原因�
   - `candidate_k = clamp(collection_count * 0.005, 20, 60)`
   - `rerank_n = clamp(candidate_k * 0.3, 10, 15)`
 - **RRF（順位融合）**: min-max正規化を廃止し、順位ベースの融合
-  - `rrf_score = w_sem / (60 + rank_sem) + w_kw / (60 + rank_kw)`
-  - スコアの絶対的な品質を保持、混線（地震→強盗など）を削減
+  - `rrf_score = w_sem / (20 + rank_sem) + w_kw / (20 + rank_kw)`
+  - RRF_K=20で上位を重視、スコアの絶対的な品質を保持
 - **Cross-Encoderリランキング**: 上位rerank_n件を再スコアリング
-  - モデル: `cross-encoder/ms-marco-MiniLM-L-6-v2`
+  - モデル: `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`（多言語対応）
   - `RERANK_ENABLED=true/false`で有効/無効切り替え
 - **重み調整**: `retrieval.semantic_weight`（0.0-1.0、デフォルト0.7）でRRFの重み付けを調整
 - **重複排除**: 同一ID（source, page, chunk_index）とquote先頭60文字で重複排除
@@ -376,12 +376,12 @@ CANDIDATE_MAX_K=60             # 候補数の最大値
 
 # Cross-Encoderリランキング
 RERANK_ENABLED=true            # リランキング有効/無効
-RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+RERANK_MODEL=cross-encoder/mmarco-mMiniLMv2-L12-H384-v1  # 多言語対応
 RERANK_RATIO=0.3               # リランク対象数の割合
 RERANK_MIN_N=10                # リランク対象数の最小値
 RERANK_MAX_N=15                # リランク対象数の最大値
 RERANK_BATCH_SIZE=8            # バッチサイズ
-RRF_K=60                       # RRF順位融合のKパラメータ
+RRF_K=20                       # RRF順位融合のKパラメータ（小さいほど上位重視）
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3
 OLLAMA_TIMEOUT_SEC=30

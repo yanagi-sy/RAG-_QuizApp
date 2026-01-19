@@ -76,9 +76,9 @@ class Settings(BaseSettings):
         description="Cross-Encoderリランキングを有効化"
     )
     rerank_model: str = Field(
-        default="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        default="cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
         alias="RERANK_MODEL",
-        description="Cross-Encoderモデル名"
+        description="Cross-Encoderモデル名（多言語対応）"
     )
     rerank_ratio: float = Field(
         default=0.3,
@@ -101,9 +101,9 @@ class Settings(BaseSettings):
         description="Cross-Encoderバッチサイズ"
     )
     rrf_k: int = Field(
-        default=60,
+        default=20,
         alias="RRF_K",
-        description="RRF（順位融合）のKパラメータ"
+        description="RRF（順位融合）のKパラメータ（小さいほど上位重視）"
     )
 
     # Ollama設定（環境変数名を明示的に指定して事故防止）
