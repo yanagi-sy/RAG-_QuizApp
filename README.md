@@ -6,8 +6,12 @@ RAG（Retrieval-Augmented Generation）を使ったQAとクイズアプリケー
 
 本アプリケーションは、RAG技術を活用してドキュメントから質問応答（QA）とクイズ生成を行うWebアプリケーションです。
 
-- **QA機能**: ドキュメントに対して質問を投げかけ、関連する情報を基に回答を生成
-- **クイズ機能**: ドキュメントから○×形式のクイズを生成し、回答を判定
+- **QA機能**: ドキュメントに対して質問を投げかけ、関連する情報を基に回答を生成（ハイブリッド検索 + LLM）
+- **クイズ機能**: ドキュメントから○×形式のクイズを自動生成し、回答を判定（**教材サンプリング方式** + 難易度別フィルタ + LLM + バリデーション）
+  - **2026-01-20更新 (1)**: 検索ベースから教材サンプリング方式に変更し、全資料 / 全難易度で必ず3件以上の引用を確保
+  - **2026-01-20更新 (2)**: LLMには「○（正しい断言文）」のみ生成させ、×はコードで自動生成することで品質向上
+  - **2026-01-20更新 (3)**: MVP版として生成数を3問に固定、タイムアウト対策として入力/出力を厳格に制限
+  - **2026-01-20更新 (4)**: LLM負担計測機能を追加（prompt_chars, output_chars等）、Ollama応答抽出を堅牢化
 
 ## 技術要件
 
@@ -100,23 +104,34 @@ rag-quiz-app/
 │   │   │   ├── embedding.py # Embedding生成（sentence-transformers）
 │   │   │   ├── vectorstore.py # ChromaDB統合
 │   │   │   ├── indexer.py  # インデックス自動構築
-│   │   │   └── chunking.py # RAG用チャンキング
-│   │   ├── quiz/           # クイズ用in-memoryストア
-│   │   │   └── store.py    # quiz_id管理
+│   │   │   ├── chunking.py # RAG用チャンキング
+│   │   │   ├── hybrid_retrieval.py # ハイブリッド検索（RRF + Cross-Encoder）
+│   │   │   └── quiz_retrieval.py # Quiz専用RAG検索（閾値なし）
+│   │   ├── quiz/           # クイズ生成・バリデーション
+│   │   │   ├── store.py    # quiz_id管理（in-memory）
+│   │   │   ├── generator.py # LLM生成＋バリデーション統合
+│   │   │   ├── parser.py   # JSONパース
+│   │   │   └── validator.py # バリデーション（○×専用）
 │   │   ├── routers/        # APIルーター
 │   │   │   ├── health.py   # GET /health
 │   │   │   ├── ask.py       # POST /ask（ハイブリッド検索）
 │   │   │   ├── search.py    # POST /search
-│   │   │   ├── quiz.py      # POST /quiz
-│   │   │   ├── judge.py     # POST /judge
-│   │   │   └── docs.py      # GET /docs/summary
-│   │   ├── search/          # 検索機能（キーワード検索）
+│   │   │   ├── quiz.py      # POST /quiz/generate（クイズ生成）
+│   │   │   ├── judge.py     # POST /judge（クイズ判定）
+│   │   │   ├── docs.py      # GET /docs/summary
+│   │   │   └── sources.py   # GET /sources（資料一覧取得）
+│   │   ├── search/          # 検索機能（キーワード検索・リランキング）
 │   │   │   ├── index.py     # 検索インデックス（キーワード検索）
-│   │   │   └── ngram.py     # 2-gram検索（日本語対応）
+│   │   │   ├── ngram.py     # 2-gram検索（日本語対応）
+│   │   │   ├── keyword.py   # キーワード検索（ストップワード除去）
+│   │   │   ├── reranker.py  # Cross-Encoderリランキング
+│   │   │   ├── snippet.py   # スニペット生成
+│   │   │   ├── stopwords.py # ストップワード定義
+│   │   │   └── cache.py     # キャッシュ機能
 │   │   ├── llm/             # LLMアダプタ層
 │   │   │   ├── base.py      # LLMClient Protocol、例外定義
 │   │   │   ├── ollama.py    # Ollamaクライアント実装
-│   │   │   └── prompt.py    # プロンプト生成
+│   │   │   └── prompt.py    # プロンプト生成（QA + Quiz）
 │   │   ├── schemas/         # リクエスト/レスポンススキーマ
 │   │   │   ├── ask.py
 │   │   │   ├── quiz.py
@@ -140,9 +155,12 @@ rag-quiz-app/
 │   │   │       ├── AnswerView.tsx
 │   │   │       └── RetrievalSlider.tsx
 │   │   └── quiz/           # クイズ機能
-│   │       ├── QuizPage.tsx
+│   │       ├── QuizPage.tsx # フェーズ管理
 │   │       ├── useQuiz.ts  # クイズ用カスタムフック
 │   │       └── components/
+│   │           ├── SetupPhase.tsx # セットアップフェーズ
+│   │           ├── PlayingPhase.tsx # プレイフェーズ
+│   │           ├── ResultPhase.tsx # 結果フェーズ
 │   │           ├── DifficultyPicker.tsx
 │   │           ├── QuizCard.tsx
 │   │           └── JudgeButtons.tsx
@@ -155,7 +173,8 @@ rag-quiz-app/
 │   ├── 02_基本設計書.md
 │   ├── 03_API設計書.md
 │   ├── 04_詳細設計書.md
-│   └── 05_進捗確認.md      # 設計書と現状実装の差分
+│   ├── 05_進捗確認.md      # 設計書と現状実装の差分
+│   └── 06_リファクタリング記録.md # リファクタリング履歴
 └── manuals/                # RAG取り込み対象（txt/pdf）
     └── sample.txt          # サンプルドキュメント
 ```
@@ -183,11 +202,117 @@ rag-quiz-app/
 - `POST /search` - チャンクを検索（キーワード検索＋2-gramフォールバック）
 
 ### Quiz
-- `POST /quiz` - クイズを生成
-- `POST /judge` - クイズの回答を判定
+- `POST /quiz/generate` - クイズを生成（難易度別、LLM統合、JSONパース＋バリデーション）
+- `POST /judge` - クイズの回答を判定（正誤判定のみ、解説生成は未実装）
 
 ### Docs
 - `GET /docs/summary` - ドキュメントのサマリー（件数・文字数・チャンク数）
+- `GET /sources` - 資料一覧を取得（source_idsのリスト）
+
+## 技術ドキュメント
+
+システムの技術詳細については、以下のドキュメントを参照してください：
+
+- **[技術スタックとデータフロー](./docs/09_技術スタックとデータフロー.md)** - 使用技術の解説、QA/Quiz機能のデータフロー図、RAGパイプライン詳細
+- [Quiz教材サンプリング実装](./docs/07_Quiz教材サンプリング実装.md) - Quiz機能の「教材サンプリング方式」の詳細
+- [Quiz安定化実装](./docs/08_Quiz安定化実装.md) - 3層ガード（Prompt強化 + Robust parse + JSON修復）の詳細
+- [リファクタリング記録](./docs/06_リファクタリング記録.md) - 過去のリファクタリング履歴
+
+## Quiz生成品質向上（○/×分離戦略）
+
+**2026-01-20実装**: Quiz生成の品質を向上させるため、以下の戦略を採用しました。
+
+### 課題
+
+- LLM出力が不安定で `quizzes=0` になることがある（JSON崩れ/空/余計な文章）
+- ○×として成立しない問題が多い（判定不能、疑問形、一般論、曖昧表現）
+- 「問題になっていない」など、真偽が教材から決められない文が混ざる
+
+### 解決策：○/×分離戦略
+
+1. **LLMには「○（正しい断言文）」のみ生成させる**
+   - 教材（citations）に基づく事実を、そのまま断言する
+   - 曖昧表現（「場合がある」「望ましい」等）を禁止
+   - 疑問形（「?」「でしょうか」）を禁止
+
+2. **×はコードで自動生成（Mutator）**
+   - ○の statement を1点だけズラして×を生成
+   - 数値の反転（+1/-1）、禁止/許可の反転、必須/任意の反転など
+   - Validator で品質チェックし、合格したもののみ採用
+
+3. **Validatorの強化**
+   - 疑問形チェック（`?`, `？`, `でしょうか`, `ですか`）
+   - 短文チェック（12文字未満は reject）
+   - 曖昧表現チェック（21種類の表現をリスト化）
+   - 不合格理由を返却（`reason`）し、debug で集計
+
+4. **Debug観測性の向上**
+   - `debug.generated_true_count`: 採用された○の件数
+   - `debug.generated_false_count`: 採用された×の件数
+   - `debug.dropped_reasons`: 不合格理由の集計（reason → count）
+
+### 実装構成
+
+- `backend/app/quiz/validator.py`: 強化版バリデーター（曖昧表現チェック等）
+- `backend/app/quiz/mutator.py`: ○→×変換（1点だけズラす）
+- `backend/app/quiz/generator.py`: 生成ロジック（○のみ生成 → ×はmutatorで生成）
+- `backend/app/llm/prompt.py`: LLMプロンプト（○のみ生成を指示）
+
+### テスト
+
+```bash
+cd backend
+./test_quiz_quality.sh
+```
+
+- 全source × beginner/intermediate/advanced で `quizzes.length == 5` を確認
+- `dropped_reasons` をログ出力し、改善の観測ができること
+
+### MVP版（2026-01-20追加）: 生成数3問固定 + タイムアウト対策
+
+タイムアウト問題を回避するため、以下の制限を導入しました：
+
+1. **生成数を3問に固定**
+   - `QuizGenerateRequest.count` のデフォルトを 3 に変更
+   - `min(req.count, 3)` で最大3問に制限（MVP上限）
+
+2. **LLM入力の厳格な制限**
+   - Citations: 最大4件（`quiz_context_top_n=4`）
+   - Quote: 最大200文字/件（`quiz_quote_max_len=200`）
+   - 総Quote文字数: 最大800文字（`quiz_total_quote_max_chars=800`）
+
+3. **LLM出力の制限**
+   - `num_predict=400`（生成トークン数上限）
+   - `temperature=0.2`（低温度で安定出力）
+   - `explanation`: 1文、最大80文字に誘導
+
+4. **プロンプト簡潔化**
+   - levelごとにテンプレートを2種類に絞る
+   - 冗長な説明文を削除、JSON出力のみに集中
+
+5. **LLM負担計測機能**
+   - `llm_prompt_chars`: プロンプト全体の文字数
+   - `llm_input_citations_count`: 実際に渡した引用数
+   - `llm_input_total_quote_chars`: 実際に渡した引用の総文字数
+   - `llm_output_chars`: LLM生出力の文字数
+   - `llm_output_preview_head`: LLM生出力の先頭200文字
+   - `llm_num_predict`, `llm_temperature`, `llm_timeout_sec`: LLMパラメータ
+
+6. **Ollama応答抽出の堅牢化**
+   - `extract_ollama_text()`: 複数のレスポンス形式に対応
+   - chat API形式、generate API形式、streaming形式など
+   - デバッグログで `ollama_raw_type` と `ollama_raw_keys` を出力
+
+### 受け入れ条件
+
+- すべての source（登録マニュアル）について
+  - beginner / intermediate / advanced
+  - count=3（MVP固定）
+  - quizzes の長さが 3 で安定する（タイムアウト回避）
+- quizzes は true_false のみ
+- statement は疑問形ではない宣言文
+- 曖昧表現・判定不能文が混ざらない（validatorで落ちる）
+- /ask の挙動・コード・設定に変更がない
 
 ## ドキュメント取り込み
 
@@ -378,14 +503,24 @@ PDFファイルが回答に参照されない場合、以下の手順で原因�
   - デバッグ情報で各段階のフィルタ結果を確認可能
 
 ### Quiz統合
-- `POST /quiz/generate`でハイブリッド検索結果を基にLLMでクイズを生成
-- **救済ロジック**: 単独資料選択時にリランク閾値で全落ちした場合でも、次善の根拠を採用してクイズ生成可能
-  - `citations == 0` の場合、post_rerankから先頭N件（デフォルト2件）を自動採用
-  - `/ask` の検索品質・挙動には一切影響なし
-  - debug情報で救済ロジックの使用状況を確認可能:
-    - `quiz_fallback_used`: true（救済使用）
-    - `quiz_fallback_reason`: "citations_zero_after_threshold"
-    - `quiz_fallback_selected`: 採用した引用のリスト
+- `POST /quiz/generate`でQuiz専用RAG検索を基にLLMでクイズを生成
+- **Quiz専用RAG検索**（`quiz_retrieval.py`）:
+  - semantic検索のみ（キーワード検索なし、抽象的なクエリに強い）
+  - rerankは順位付けのみ（閾値で全落ちさせない）
+  - 最低N件を必ず返す（LLM生成の材料確保）
+  - `/ask` とは独立した処理フロー
+- **LLM生成**（`generator.py`）:
+  - 難易度別プロンプト生成
+  - 再試行制御（LLMタイムアウト・パースエラー時に最大2回試行）
+  - バリデーション統合
+- **JSONパース**（`parser.py`）:
+  - マークダウンブロック対応
+  - question → statement互換性対応
+  - UUID自動生成
+- **バリデーション**（`validator.py`）:
+  - ○×問題専用バリデーション
+  - 疑問形禁止（`?` `？` を除外）
+  - citations の存在・内容チェック
 
 ## LLM統合
 
@@ -413,8 +548,11 @@ RERANK_SCORE_GAP_THRESHOLD=6.0 # トップとの差分閾値（普遍的な品�
 RERANK_BATCH_SIZE=8            # バッチサイズ
 RRF_K=20                       # RRF順位融合のKパラメータ（小さいほど上位重視）
 
-# Quiz救済ロジック
-QUIZ_FALLBACK_TOP_N=2          # Quiz生成時にcitationsが0件の場合、post_rerankから採用する最低件数
+# Quiz専用設定
+QUIZ_CANDIDATE_K=30            # Quiz生成時の候補取得件数
+QUIZ_SEMANTIC_WEIGHT=1.0       # Quiz検索のsemantic重み（1.0 = semantic検索のみ）
+QUIZ_RERANK_ENABLED=true       # Quiz検索のrerank有効/無効
+QUIZ_CONTEXT_TOP_N=5           # Quiz生成時のコンテキスト件数
 
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=llama3

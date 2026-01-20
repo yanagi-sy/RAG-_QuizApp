@@ -2,10 +2,10 @@
 Quiz APIルーター
 """
 import asyncio
-import json
 import logging
-import uuid
-from typing import Dict, Any
+import random
+import time
+from typing import Dict
 from fastapi import APIRouter
 
 from app.quiz.store import QuizItem, save_quiz
@@ -14,74 +14,17 @@ from app.schemas.quiz import (
     QuizResponse,
     QuizGenerateRequest,
     QuizGenerateResponse,
-    QuizItem as QuizItemSchema,
 )
 from app.schemas.common import Citation
 from app.core.settings import settings
-from app.llm.base import LLMInternalError, LLMTimeoutError
-from app.llm.ollama import get_ollama_client
-from app.llm.prompt import build_quiz_generation_messages
-from app.routers.ask import _hybrid_retrieval
+from app.quiz.retrieval import retrieve_for_quiz
+from app.quiz.generator import generate_and_validate_quizzes
+from app.llm.base import LLMTimeoutError, LLMInternalError
 
 # ロガー設定
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-def validate_quiz_item(item: dict) -> tuple[bool, str]:
-    """
-    クイズアイテムをバリデーション（○×問題専用）
-    
-    検証項目:
-    - type が "true_false" であること
-    - statement に "?" "？" が含まれないこと
-    - answer_bool が bool であること
-    - citations が1件以上あること
-    - citations の source/page/quote が欠けていないこと
-    
-    Args:
-        item: クイズアイテム（dict）
-        
-    Returns:
-        (ok: bool, reason: str) のタプル
-    """
-    # type チェック
-    if item.get("type") != "true_false":
-        return (False, f"type が true_false ではありません: {item.get('type')}")
-    
-    # statement チェック（必須、疑問形禁止）
-    statement = item.get("statement")
-    if not statement or not isinstance(statement, str):
-        return (False, "statement が文字列ではありません")
-    
-    if "?" in statement or "？" in statement:
-        return (False, f"statement に疑問符が含まれています: {statement[:50]}")
-    
-    # answer_bool チェック（必須、bool型）
-    answer_bool = item.get("answer_bool")
-    if answer_bool is None or not isinstance(answer_bool, bool):
-        return (False, f"answer_bool が bool ではありません: {answer_bool}")
-    
-    # citations チェック（1件以上）
-    citations = item.get("citations")
-    if not citations or not isinstance(citations, list) or len(citations) == 0:
-        return (False, "citations が空です")
-    
-    # citations の中身をチェック
-    for i, cit in enumerate(citations):
-        if not isinstance(cit, dict):
-            return (False, f"citations[{i}] が辞書ではありません")
-        
-        if not cit.get("source"):
-            return (False, f"citations[{i}].source が空です")
-        
-        if not cit.get("quote"):
-            return (False, f"citations[{i}].quote が空です")
-        
-        # page は null でも OK（txt の場合）
-    
-    return (True, "")
 
 
 @router.post("", response_model=QuizResponse)
@@ -130,12 +73,10 @@ async def create_quiz(request: QuizRequest) -> QuizResponse:
 @router.post("/generate", response_model=QuizGenerateResponse)
 async def generate_quizzes(request: QuizGenerateRequest) -> QuizGenerateResponse:
     """
-    根拠付きクイズを生成する
+    根拠付きクイズを生成する（教材サンプリング方式）
     
-    - level, topicから検索クエリを作成
-    - 既存の _hybrid_retrieval で引用を取得
-    - LLMでJSON形式のクイズを生成
-    - 引用に基づくクイズのみを返す
+    検索ではなく「教材からサンプリングして出題」する。
+    全資料 / 任意の単独資料 / 全難易度で必ず count 件生成できる。
     
     Args:
         request: クイズ生成リクエスト
@@ -143,214 +84,46 @@ async def generate_quizzes(request: QuizGenerateRequest) -> QuizGenerateResponse
     Returns:
         生成されたクイズのリスト
     """
-    # 検索クエリを構築（topic + level）
-    search_query = _build_search_query(request.level, request.topic)
-    logger.info(f"Quiz生成用検索クエリ: {search_query}")
+    # タイミング計測開始
+    t_start = time.perf_counter()
     
-    # NEW: source_ids をそのまま allowed_sources として使用（変換不要）
-    allowed_sources = request.source_ids if request.source_ids else None
-    logger.info(f"[DEBUG] request.source_ids = {request.source_ids}")
-    logger.info(f"[DEBUG] allowed_sources = {allowed_sources}")
-    if allowed_sources:
-        logger.info(f"検索対象資料を絞り込み: {allowed_sources}")
+    # クイズ専用の候補取得（サンプリング方式、タイミング計測付き）
+    t_retrieval_start = time.perf_counter()
+    citations, quiz_debug_info = retrieve_for_quiz(
+        source_ids=request.source_ids,
+        level=request.level,
+        count=request.count,
+        debug=request.debug
+    )
+    t_retrieval_ms = (time.perf_counter() - t_retrieval_start) * 1000
     
-    # 検索パラメータ
-    semantic_weight = 0.5  # デフォルト
-    if request.retrieval and request.retrieval.semantic_weight is not None:
-        semantic_weight = request.retrieval.semantic_weight
-        semantic_weight = max(0.0, min(1.0, semantic_weight))
-    
-    keyword_weight = 1.0 - semantic_weight
-    
-    # 既存の _hybrid_retrieval で引用を取得（source_filter を追加）
-    citations = []
-    debug_info = None
-    try:
-        citations, debug_info = _hybrid_retrieval(
-            query=search_query,
-            semantic_weight=semantic_weight,
-            keyword_weight=keyword_weight,
-            top_k=settings.top_k,
-            include_debug=request.debug,
-            source_filter=allowed_sources,
-        )
-        logger.info(f"Hybrid retrieval完了: {len(citations)}件の引用を取得")
-    except Exception as e:
-        logger.warning(f"Hybrid retrievalに失敗しました: {type(e).__name__}: {e}")
-        # 引用が取得できない場合はエラーレスポンスを返す（debug情報を含める）
-        final_debug = None
-        if request.debug:
-            final_debug = debug_info or {}
-            # _post_rerank_with_textは内部情報なので削除
-            if "_post_rerank_with_text" in final_debug:
-                del final_debug["_post_rerank_with_text"]
-            final_debug["request_source_ids"] = request.source_ids
-            final_debug["search_query"] = search_query
-            final_debug["error"] = f"検索に失敗しました: {str(e)}"
-        
-        return QuizGenerateResponse(
-            quizzes=[],
-            debug=final_debug,
-        )
-    
-    # 引用が少ない場合はcountを調整
+    # 引用が0件の場合はエラーを返す
     if len(citations) == 0:
-        logger.warning("引用が見つかりませんでした。救済ロジックを試行します。")
-        
-        # NEW: Quiz救済ロジック（閾値で全落ちした場合に、次善の根拠を採用）
-        quiz_fallback_used = False
-        quiz_fallback_reason = None
-        quiz_fallback_selected = []
-        
-        if debug_info and "_post_rerank_with_text" in debug_info:
-            post_rerank_with_text = debug_info["_post_rerank_with_text"]
-            
-            if len(post_rerank_with_text) > 0:
-                # 先頭からQUIZ_FALLBACK_TOP_N件を取得して仮citationsを構築
-                fallback_count = min(settings.quiz_fallback_top_n, len(post_rerank_with_text))
-                
-                for item in post_rerank_with_text[:fallback_count]:
-                    source = item["source"]
-                    page = item.get("page")
-                    text = item["text"]
-                    rerank_score = item["rerank_score"]
-                    
-                    # pageの扱い：txtはnull、pdfは1以上をそのまま返す
-                    page_value = page if page is not None and page > 0 else None
-                    
-                    # quoteは先頭400文字で切る（quiz生成用の最小抜粋）
-                    quote = text[:400] if len(text) > 400 else text
-                    
-                    citations.append(
-                        Citation(
-                            source=source,
-                            page=page_value,
-                            quote=quote,
-                        )
-                    )
-                    
-                    quiz_fallback_selected.append({
-                        "source": source,
-                        "page": page_value,
-                        "rerank_score": rerank_score,
-                    })
-                
-                quiz_fallback_used = True
-                quiz_fallback_reason = "citations_zero_after_threshold"
-                logger.info(
-                    f"Quiz救済ロジック適用: {len(citations)}件の引用を採用（post_rerankから取得）"
-                )
-        
-        # 救済後もcitationsが0件の場合はエラーを返す
-        if len(citations) == 0:
-            # debug情報を構築（ask側のdebugを含める）
-            final_debug = None
-            if request.debug:
-                final_debug = debug_info or {}
-                final_debug["request_source_ids"] = request.source_ids
-                final_debug["search_query"] = search_query
-                final_debug["error"] = "引用が見つかりませんでした（救済ロジックも失敗）"
-                final_debug["quiz_fallback_used"] = quiz_fallback_used
-            
-            return QuizGenerateResponse(
-                quizzes=[],
-                debug=final_debug,
-            )
-        
-        # 救済成功時はdebug情報に追加（後でfinal_debugに統合）
-        if request.debug and quiz_fallback_used:
-            if debug_info is None:
-                debug_info = {}
-            debug_info["quiz_fallback_used"] = quiz_fallback_used
-            debug_info["quiz_fallback_reason"] = quiz_fallback_reason
-            debug_info["quiz_fallback_selected"] = quiz_fallback_selected
-    
-    # 引用が少ない場合は生成数を減らす
-    adjusted_count = min(request.count, max(1, len(citations) // 2))
-    if adjusted_count < request.count:
-        logger.info(f"引用数が少ないため、生成数を {request.count} → {adjusted_count} に調整")
-    
-    # LLMでクイズを生成（バリデーション付き、最大2回試行）
-    accepted_quizzes = []
-    rejected_items = []
-    llm_error = None
-    total_generated = 0
-    
-    # 1回目の生成
-    try:
-        quizzes, rejected = await _generate_and_validate_quizzes(
-            level=request.level,
-            count=adjusted_count,
-            topic=request.topic,
-            citations=citations,
+        return _build_error_response(
+            request, quiz_debug_info,
+            "引用が見つかりませんでした"
         )
-        accepted_quizzes.extend(quizzes)
-        rejected_items.extend(rejected)
-        total_generated += len(quizzes) + len(rejected)
-        
-        logger.info(
-            f"Quiz生成1回目: generated={len(quizzes) + len(rejected)}, "
-            f"accepted={len(quizzes)}, rejected={len(rejected)}"
-        )
-    except Exception as e:
-        logger.error(f"Quiz生成1回目に失敗: {type(e).__name__}: {e}")
-        llm_error = str(e)
     
-    # 不足時は2回目の生成（最大1回だけ再試行）
-    if len(accepted_quizzes) < adjusted_count and llm_error is None:
-        remaining_count = adjusted_count - len(accepted_quizzes)
-        logger.info(f"不足分を再生成: remaining={remaining_count}")
-        
-        try:
-            quizzes_2, rejected_2 = await _generate_and_validate_quizzes(
-                level=request.level,
-                count=remaining_count,
-                topic=request.topic,
-                citations=citations,
-            )
-            accepted_quizzes.extend(quizzes_2)
-            rejected_items.extend(rejected_2)
-            total_generated += len(quizzes_2) + len(rejected_2)
-            
-            logger.info(
-                f"Quiz生成2回目: generated={len(quizzes_2) + len(rejected_2)}, "
-                f"accepted={len(quizzes_2)}, rejected={len(rejected_2)}"
-            )
-        except Exception as e:
-            logger.error(f"Quiz生成2回目に失敗: {type(e).__name__}: {e}")
-            if not llm_error:
-                llm_error = str(e)
+    # MVP: 生成数を常に3問に固定（タイムアウト対策）
+    target_count = min(request.count, 3)
+    logger.info(f"Quiz生成目標: target={target_count}（MVP固定、req.count={request.count}）, citations={len(citations)}件")
+    
+    # LLMでクイズを生成（バリデーション付き）
+    t_llm_start = time.perf_counter()
+    accepted_quizzes, rejected_items, error_info, attempts, attempt_errors, aggregated_stats = await _generate_quizzes_with_retry(
+        request, target_count, citations
+    )
+    t_llm_ms = (time.perf_counter() - t_llm_start) * 1000
+    
+    # 全体のタイミング計測
+    t_total_ms = (time.perf_counter() - t_start) * 1000
     
     # debugレスポンスを構築
-    final_debug = None
-    if request.debug:
-        final_debug = debug_info or {}
-        
-        # _post_rerank_with_textは内部情報なので削除
-        if "_post_rerank_with_text" in final_debug:
-            del final_debug["_post_rerank_with_text"]
-        
-        # リクエスト情報を追加（先頭に配置）
-        final_debug["request_source_ids"] = request.source_ids
-        final_debug["search_query"] = search_query
-        final_debug["adjusted_count"] = adjusted_count
-        final_debug["generated_count"] = total_generated
-        final_debug["accepted_count"] = len(accepted_quizzes)
-        final_debug["rejected_count"] = len(rejected_items)
-        
-        # rejected_reasons を集計
-        rejected_reasons: Dict[str, int] = {}
-        for item in rejected_items:
-            reason = item.get("reason", "unknown")
-            rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
-        final_debug["rejected_reasons"] = rejected_reasons
-        
-        # sample_rejected（先頭1〜2件）
-        if len(rejected_items) > 0:
-            final_debug["sample_rejected"] = rejected_items[:2]
-        
-        if llm_error:
-            final_debug["llm_error"] = llm_error
+    final_debug = _build_debug_response(
+        request, quiz_debug_info, target_count,
+        len(citations), len(accepted_quizzes), rejected_items, error_info, attempts,
+        attempt_errors, aggregated_stats, t_retrieval_ms, t_llm_ms, t_total_ms
+    )
     
     return QuizGenerateResponse(
         quizzes=accepted_quizzes,
@@ -358,264 +131,372 @@ async def generate_quizzes(request: QuizGenerateRequest) -> QuizGenerateResponse
     )
 
 
-def _build_search_query(
+async def _call_llm_and_collect(
     level: str,
-    topic: str | None,
-) -> str:
-    """
-    Quiz生成用の検索クエリを構築
-    
-    - topicがあればtopicを含める
-    - levelに応じてクエリを調整
-    
-    Args:
-        level: 難易度
-        topic: トピック（オプション）
-        
-    Returns:
-        検索クエリ文字列
-    """
-    # levelに応じたキーワード
-    level_keywords = {
-        "beginner": "基本 ルール 手順 共通",
-        "intermediate": "理由 方法 適用 実務",
-        "advanced": "例外 禁止 判断基準 注意",
-    }
-    
-    level_keyword = level_keywords.get(level, "基本 ルール")
-    
-    # topicがあればtopicを優先
-    if topic:
-        return f"{topic} {level_keyword}"
-    else:
-        return level_keyword
-
-
-async def _generate_and_validate_quizzes(
-    level: str,
-    count: int,
+    need: int,
     topic: str | None,
     citations: list[Citation],
-) -> tuple[list[QuizItemSchema], list[dict]]:
+    shuffle: bool = True
+) -> tuple[list, list[dict], list[dict], dict]:
     """
-    LLMでクイズを生成し、バリデーションを行う
+    LLMでクイズを生成・パース・バリデーション（1回分）
+    
+    多様性確保のため、試行ごとに citations の順序をシャッフルする。
     
     Args:
         level: 難易度
-        count: 生成数
+        need: 生成希望件数
         topic: トピック
+        citations: 引用リスト
+        shuffle: citations をシャッフルするか（デフォルト: True）
+        
+    Returns:
+        (accepted_quizzes, rejected_items, attempt_errors, generation_stats)
+        - generation_stats: 生成統計（generated_true_count, generated_false_count, dropped_reasons）
+    """
+    # 多様性のために citations をシャッフル
+    shuffled_citations = list(citations)
+    if shuffle and len(shuffled_citations) > 1:
+        random.shuffle(shuffled_citations)
+    
+    quizzes, rejected, attempt_errors, generation_stats = await generate_and_validate_quizzes(
+        level=level,
+        count=need,
+        topic=topic,
+        citations=shuffled_citations,
+    )
+    return (quizzes, rejected, attempt_errors, generation_stats)
+
+
+async def _generate_quizzes_with_retry(
+    request: QuizGenerateRequest,
+    target_count: int,
+    citations: list[Citation]
+) -> tuple[list, list[dict], dict, int, list[dict], dict]:
+    """
+    クイズを生成（再試行付き、重複排除）
+    
+    高速化のため、quiz_max_attempts（デフォルト1回）まで試行する。
+    statement の重複は排除する。
+    
+    Args:
+        request: クイズ生成リクエスト
+        target_count: 生成目標件数（request.count）
         citations: 引用リスト
         
     Returns:
-        (accepted_quizzes, rejected_items) のタプル
-        - accepted_quizzes: バリデーション通過したクイズのリスト
-        - rejected_items: バリデーション失敗したアイテム情報のリスト
+        (accepted_quizzes, rejected_items, error_info, attempts, all_attempt_errors, aggregated_stats)
+        - error_info: {"llm_error": str | None, "parse_error": str | None}（最終失敗時のみ）
+        - all_attempt_errors: 全試行の失敗履歴（途中失敗を含む）
+        - aggregated_stats: 全試行の統計集計（generated_true_count, generated_false_count, dropped_reasons）
     """
-    # LLMで生成（JSONパースまで）
-    raw_quizzes = await _generate_quizzes_with_llm(
-        level=level,
-        count=count,
-        topic=topic,
-        citations=citations,
-    )
+    target = target_count
+    accepted_quizzes = []
+    rejected_items = []
+    error_info = {"llm_error": None, "parse_error": None}
+    attempts = 0
+    all_attempt_errors = []
+    aggregated_stats = {
+        "generated_true_count": 0,
+        "generated_false_count": 0,
+        "dropped_reasons": {},
+    }  # 全試行の統計集計
     
-    # バリデーション
-    accepted = []
-    rejected = []
+    # statement 重複排除用のセット
+    seen_statements = set()
     
-    for quiz in raw_quizzes:
-        # dict に変換してバリデーション
-        quiz_dict = quiz.model_dump() if hasattr(quiz, "model_dump") else quiz.dict()
-        ok, reason = validate_quiz_item(quiz_dict)
+    # 最大 quiz_max_attempts 回まで試行（短い出力で確実に返す戦略）
+    max_attempts = settings.quiz_max_attempts
+    target_per_attempt = settings.quiz_target_per_attempt  # 1回の生成で狙う問題数（3問）
+    
+    while len(accepted_quizzes) < target and attempts < max_attempts:
+        attempts += 1
+        need = target - len(accepted_quizzes)
         
-        if ok:
-            accepted.append(quiz)
-        else:
-            logger.warning(f"Quiz バリデーション失敗: {reason}")
-            rejected.append({
-                "statement": quiz_dict.get("statement", quiz_dict.get("question", ""))[:100],
-                "reason": reason,
-            })
-    
-    return (accepted, rejected)
-
-
-async def _generate_quizzes_with_llm(
-    level: str,
-    count: int,
-    topic: str | None,
-    citations: list[Citation],
-) -> list[QuizItemSchema]:
-    """
-    LLMでクイズを生成
-    
-    - JSON形式で出力（厳守）
-    - 引用に基づくクイズのみ
-    - パース失敗時は再試行（1回まで）
-    
-    Args:
-        level: 難易度
-        count: 生成数
-        topic: トピック
-        citations: 引用リスト
+        # 短い出力で確実に返す戦略: 1回あたり3問を狙う
+        request_count = min(need, target_per_attempt)
         
-    Returns:
-        生成されたクイズのリスト
+        logger.info(
+            f"Quiz生成{attempts}回目: need={need}, request_count={request_count}, "
+            f"current_accepted={len(accepted_quizzes)}/{target}"
+        )
         
-    Raises:
-        LLMTimeoutError: タイムアウト
-        LLMInternalError: LLMエラー
-        ValueError: JSONパースエラー
-    """
-    # LLMクライアントを取得
-    llm_client = get_ollama_client()
-    
-    # プロンプトを構築
-    messages = build_quiz_generation_messages(
-        level=level,
-        count=count,
-        topic=topic,
-        citations=citations,
-    )
-    
-    # LLMで生成（最大2回試行）
-    max_retries = 2
-    for attempt in range(max_retries):
         try:
-            # LLMで生成
-            response_text = await asyncio.wait_for(
-                llm_client.chat(messages=messages),
-                timeout=settings.ollama_timeout_sec * 2,  # Quiz生成は時間がかかるので2倍
+            quizzes, rejected, attempt_errors, generation_stats = await _call_llm_and_collect(
+                level=request.level,
+                need=request_count,
+                topic=request.topic,
+                citations=citations,
             )
             
-            logger.info(f"LLMレスポンス取得成功（試行 {attempt + 1}/{max_retries}）")
+            # attempt_errors を統合（retry回数を調整）
+            for err in attempt_errors:
+                err["retry"] = attempts
+                all_attempt_errors.append(err)
             
-            # JSONパース
-            quizzes = _parse_quiz_json(response_text, citations)
+            # generation_stats を集計
+            aggregated_stats["generated_true_count"] += generation_stats.get("generated_true_count", 0)
+            aggregated_stats["generated_false_count"] += generation_stats.get("generated_false_count", 0)
             
-            if len(quizzes) > 0:
-                return quizzes
-            else:
-                logger.warning("生成されたクイズが0件でした")
-                if attempt < max_retries - 1:
-                    logger.info("再試行します")
-                    continue
+            # dropped_reasons を集計（reason -> count）
+            for reason, count in generation_stats.get("dropped_reasons", {}).items():
+                aggregated_stats["dropped_reasons"][reason] = aggregated_stats["dropped_reasons"].get(reason, 0) + count
+            
+            # プロンプト統計とLLMパラメータを集計（最初の試行の値を保持、毎回同じはず）
+            if attempts == 1:
+                for key in ["llm_prompt_chars", "llm_prompt_preview_head", 
+                           "llm_input_citations_count", "llm_input_total_quote_chars",
+                           "llm_num_predict", "llm_temperature", "llm_timeout_sec"]:
+                    if key in generation_stats:
+                        aggregated_stats[key] = generation_stats[key]
+            
+            # LLM生出力は最新の試行の値を使用（最後に成功した出力を見たい）
+            for key in ["llm_output_chars", "llm_output_preview_head"]:
+                if key in generation_stats:
+                    aggregated_stats[key] = generation_stats[key]
+            
+            # statement 重複排除
+            unique_quizzes = []
+            for quiz in quizzes:
+                stmt = quiz.statement.strip()
+                if stmt not in seen_statements:
+                    seen_statements.add(stmt)
+                    unique_quizzes.append(quiz)
+                    
+                    # 目標数に達したら打ち切り（余分な生成分を除外）
+                    if len(accepted_quizzes) + len(unique_quizzes) >= target:
+                        break
                 else:
-                    raise ValueError("クイズの生成に失敗しました（0件）")
+                    # 重複は rejected に追加
+                    rejected_items.append({
+                        "statement": stmt[:100],
+                        "reason": "statement重複",
+                    })
+            
+            accepted_quizzes.extend(unique_quizzes)
+            rejected_items.extend(rejected)
+            
+            logger.info(
+                f"Quiz生成{attempts}回目完了: generated={len(quizzes) + len(rejected)}, "
+                f"unique_accepted={len(unique_quizzes)}, rejected={len(rejected)}, "
+                f"duplicates={len(quizzes) - len(unique_quizzes)}"
+            )
+            
+            # 生成数が0の場合は再試行しても意味がないので抜ける
+            if len(quizzes) == 0:
+                logger.warning("生成数が0なので試行を中断します")
+                break
+            
+        except LLMTimeoutError as e:
+            # LLMタイムアウト
+            logger.error(f"Quiz生成{attempts}回目にタイムアウト: {e}")
+            
+            # 最終失敗時のみ error_info に記録
+            if attempts >= max_attempts and not error_info["llm_error"]:
+                error_info["llm_error"] = "timeout"
+            
+            # attempt_errors に記録
+            all_attempt_errors.append({
+                "retry": attempts,
+                "attempt": 1,
+                "stage": "llm",
+                "type": "timeout",
+                "message": str(e),
+            })
+            
+            if attempts >= max_attempts:
+                break
         
-        except (LLMTimeoutError, asyncio.TimeoutError) as e:
-            logger.warning(f"LLMタイムアウト（試行 {attempt + 1}/{max_retries}）: {e}")
-            if attempt < max_retries - 1:
-                continue
-            else:
-                raise LLMTimeoutError("Quiz生成がタイムアウトしました")
+        except LLMInternalError as e:
+            # LLM内部エラー
+            logger.error(f"Quiz生成{attempts}回目にLLMエラー: {e}")
+            
+            # 最終失敗時のみ error_info に記録
+            if attempts >= max_attempts and not error_info["llm_error"]:
+                error_info["llm_error"] = f"llm_internal_error:{str(e)}"
+            
+            # attempt_errors に記録
+            all_attempt_errors.append({
+                "retry": attempts,
+                "attempt": 1,
+                "stage": "llm",
+                "type": "llm_internal_error" if "empty_response" not in str(e) else "empty_response",
+                "message": str(e),
+            })
+            
+            if attempts >= max_attempts:
+                break
         
-        except (LLMInternalError, json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"LLMエラーまたはJSONパースエラー（試行 {attempt + 1}/{max_retries}）: {e}")
-            if attempt < max_retries - 1:
-                continue
-            else:
-                raise ValueError(f"Quiz生成に失敗しました: {str(e)}")
-    
-    # ここには到達しないはずだが、念のため
-    raise ValueError("Quiz生成に失敗しました（不明なエラー）")
-
-
-def _parse_quiz_json(
-    response_text: str,
-    fallback_citations: list[Citation],
-) -> list[QuizItemSchema]:
-    """
-    LLMレスポンスからクイズをパース（○×問題専用）
-    
-    - JSON形式のパース
-    - statement フィールドの確認（question も互換性のため許容）
-    - UUIDの生成
-    
-    Args:
-        response_text: LLMからのレスポンステキスト
-        fallback_citations: パースに失敗した場合のフォールバック引用
+        except ValueError as e:
+            # JSONパースエラー、空応答、バリデーションエラーなど
+            error_str = str(e)
+            logger.error(f"Quiz生成{attempts}回目にパースエラー: {error_str}")
+            
+            # 最終失敗時のみ error_info に記録
+            if attempts >= max_attempts:
+                if "empty_response" in error_str and not error_info["llm_error"]:
+                    error_info["llm_error"] = "empty_response"
+                elif ("json_parse_error" in error_str or "json_validation_error" in error_str) and not error_info["parse_error"]:
+                    error_info["parse_error"] = error_str
+                elif "generated_zero_quizzes" in error_str and not error_info["parse_error"]:
+                    error_info["parse_error"] = "generated_zero_quizzes"
+                elif not error_info["parse_error"]:
+                    error_info["parse_error"] = error_str
+            
+            # attempt_errors に記録
+            all_attempt_errors.append({
+                "retry": attempts,
+                "attempt": 1,
+                "stage": "parse" if "parse" in error_str else "validate",
+                "type": "json_parse_error" if "json_parse_error" in error_str else "json_validation_error" if "json_validation_error" in error_str else "generated_zero_quizzes" if "generated_zero_quizzes" in error_str else "empty_response" if "empty_response" in error_str else "unknown",
+                "message": error_str,
+            })
+            
+            if attempts >= max_attempts:
+                break
         
-    Returns:
-        パースされたクイズのリスト
-        
-    Raises:
-        json.JSONDecodeError: JSONパースエラー
-        ValueError: バリデーションエラー
-    """
-    # JSONブロックを抽出（```json ... ``` の場合）
-    response_text = response_text.strip()
-    if response_text.startswith("```json"):
-        response_text = response_text[7:]  # "```json" を削除
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]  # "```" を削除
-        response_text = response_text.strip()
-    elif response_text.startswith("```"):
-        response_text = response_text[3:]  # "```" を削除
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]  # "```" を削除
-        response_text = response_text.strip()
-    
-    # JSONパース
-    try:
-        data = json.loads(response_text)
-    except json.JSONDecodeError as e:
-        logger.error(f"JSONパースエラー: {e}")
-        logger.error(f"レスポンステキスト（先頭500文字）: {response_text[:500]}")
-        raise
-    
-    # quizzesキーの確認
-    if "quizzes" not in data:
-        raise ValueError("JSONに 'quizzes' キーが含まれていません")
-    
-    quizzes_data = data["quizzes"]
-    if not isinstance(quizzes_data, list):
-        raise ValueError("'quizzes' はリストである必要があります")
-    
-    # 各クイズをパース
-    quizzes = []
-    for i, quiz_data in enumerate(quizzes_data):
-        try:
-            # IDを生成（LLMが返さない場合）
-            if "id" not in quiz_data or not quiz_data["id"]:
-                quiz_data["id"] = str(uuid.uuid4())[:8]  # 短いID
-            
-            # statement フィールドの確認（question も互換性のため許容）
-            if "statement" not in quiz_data:
-                if "question" in quiz_data:
-                    # 互換性のため question → statement に変換
-                    quiz_data["statement"] = quiz_data["question"]
-                else:
-                    logger.warning(f"クイズ {i} に statement も question もありません")
-                    continue
-            
-            # type のデフォルト値設定（○×固定）
-            if "type" not in quiz_data:
-                quiz_data["type"] = "true_false"
-            
-            # Citationをパース（LLMが返した場合）
-            if "citations" in quiz_data and isinstance(quiz_data["citations"], list):
-                parsed_citations = []
-                for cit_data in quiz_data["citations"]:
-                    parsed_citations.append(
-                        Citation(
-                            source=cit_data.get("source", ""),
-                            page=cit_data.get("page"),
-                            quote=cit_data.get("quote", ""),
-                        )
-                    )
-                quiz_data["citations"] = parsed_citations
-            else:
-                # citationsがない場合はfallbackを使用
-                quiz_data["citations"] = fallback_citations[:1]  # 最初の1件
-            
-            # QuizItemSchemaにパース
-            quiz_item = QuizItemSchema(**quiz_data)
-            quizzes.append(quiz_item)
-            
         except Exception as e:
-            logger.warning(f"クイズ {i} のパースに失敗: {e}")
-            # パースに失敗したクイズはスキップ
-            continue
+            # その他の予期しないエラー
+            logger.error(f"Quiz生成{attempts}回目に予期しないエラー: {type(e).__name__}: {e}")
+            
+            # 最終失敗時のみ error_info に記録
+            if attempts >= max_attempts and not error_info["llm_error"]:
+                error_info["llm_error"] = f"unexpected:{type(e).__name__}:{str(e)}"
+            
+            # attempt_errors に記録
+            all_attempt_errors.append({
+                "retry": attempts,
+                "attempt": 1,
+                "stage": "unknown",
+                "type": "unexpected_error",
+                "message": f"{type(e).__name__}: {str(e)}",
+            })
+            
+            if attempts >= max_attempts:
+                break
     
-    return quizzes
+    return (accepted_quizzes, rejected_items, error_info, attempts, all_attempt_errors, aggregated_stats)
+
+
+def _build_error_response(
+    request: QuizGenerateRequest,
+    quiz_debug_info: dict | None,
+    error_message: str
+) -> QuizGenerateResponse:
+    """
+    エラーレスポンスを構築
+    """
+    final_debug = None
+    if request.debug:
+        final_debug = quiz_debug_info or {}
+        final_debug["request_source_ids"] = request.source_ids
+        final_debug["request_level"] = request.level
+        final_debug["request_count"] = request.count
+        final_debug["error"] = error_message
+    
+    return QuizGenerateResponse(
+        quizzes=[],
+        debug=final_debug,
+    )
+
+
+def _build_debug_response(
+    request: QuizGenerateRequest,
+    quiz_debug_info: dict | None,
+    target_count: int,
+    citations_count: int,
+    accepted_count: int,
+    rejected_items: list[dict],
+    error_info: dict,
+    attempts: int,
+    attempt_errors: list[dict],
+    aggregated_stats: dict,
+    t_retrieval_ms: float,
+    t_llm_ms: float,
+    t_total_ms: float
+) -> dict | None:
+    """
+    debugレスポンスを構築（timing情報、attempt_errors、generation_stats付き）
+    """
+    if not request.debug:
+        return None
+    
+    final_debug = quiz_debug_info or {}
+    
+    # リクエスト情報を追加
+    final_debug["request_source_ids"] = request.source_ids
+    final_debug["request_level"] = request.level
+    final_debug["request_count"] = request.count
+    final_debug["request_topic"] = request.topic
+    final_debug["target_count"] = target_count
+    final_debug["citations_count"] = citations_count
+    final_debug["quiz_generation_attempts"] = attempts
+    final_debug["generated_count"] = accepted_count + len(rejected_items)
+    final_debug["accepted_count"] = accepted_count
+    final_debug["rejected_count"] = len(rejected_items)
+    final_debug["quiz_shortfall"] = target_count - accepted_count
+    
+    # 生成統計を追加（値がある時だけセット、0初期化しない）
+    if "generated_true_count" in aggregated_stats:
+        final_debug["generated_true_count"] = aggregated_stats["generated_true_count"]
+    if "generated_false_count" in aggregated_stats:
+        final_debug["generated_false_count"] = aggregated_stats["generated_false_count"]
+    if "dropped_reasons" in aggregated_stats:
+        final_debug["dropped_reasons"] = aggregated_stats["dropped_reasons"]
+    
+    # LLM負担計測（プロンプト統計、値がある時だけセット）
+    if "llm_prompt_chars" in aggregated_stats:
+        final_debug["llm_prompt_chars"] = aggregated_stats["llm_prompt_chars"]
+    if "llm_prompt_preview_head" in aggregated_stats:
+        final_debug["llm_prompt_preview_head"] = aggregated_stats["llm_prompt_preview_head"]
+    if "llm_input_citations_count" in aggregated_stats:
+        final_debug["llm_input_citations_count"] = aggregated_stats["llm_input_citations_count"]
+    if "llm_input_total_quote_chars" in aggregated_stats:
+        final_debug["llm_input_total_quote_chars"] = aggregated_stats["llm_input_total_quote_chars"]
+    
+    # LLM生出力計測（値がある時だけセット）
+    if "llm_output_chars" in aggregated_stats:
+        final_debug["llm_output_chars"] = aggregated_stats["llm_output_chars"]
+    if "llm_output_preview_head" in aggregated_stats:
+        final_debug["llm_output_preview_head"] = aggregated_stats["llm_output_preview_head"]
+    
+    # LLMパラメータ（値がある時だけセット）
+    if "llm_num_predict" in aggregated_stats:
+        final_debug["llm_num_predict"] = aggregated_stats["llm_num_predict"]
+    if "llm_temperature" in aggregated_stats:
+        final_debug["llm_temperature"] = aggregated_stats["llm_temperature"]
+    if "llm_timeout_sec" in aggregated_stats:
+        final_debug["llm_timeout_sec"] = aggregated_stats["llm_timeout_sec"]
+    
+    # LLM試行回数
+    final_debug["llm_attempts"] = attempts  # 生成試行回数
+    final_debug["llm_retries"] = max(0, attempts - 1)  # 再試行回数（初回除く）
+    
+    # タイミング情報を追加（ms単位、小数点1桁）
+    final_debug["timing"] = {
+        "retrieval": round(t_retrieval_ms, 1),
+        "llm": round(t_llm_ms, 1),
+        "total": round(t_total_ms, 1),
+    }
+    
+    # rejected_reasons を集計
+    rejected_reasons: Dict[str, int] = {}
+    for item in rejected_items:
+        reason = item.get("reason", "unknown")
+        rejected_reasons[reason] = rejected_reasons.get(reason, 0) + 1
+    final_debug["rejected_reasons"] = rejected_reasons
+    
+    # sample_rejected（先頭1〜2件）
+    if len(rejected_items) > 0:
+        final_debug["sample_rejected"] = rejected_items[:2]
+    
+    # エラー情報を追加（最終失敗時のみ）
+    if error_info.get("llm_error"):
+        final_debug["llm_error"] = error_info["llm_error"]
+    if error_info.get("parse_error"):
+        final_debug["parse_error"] = error_info["parse_error"]
+    
+    # attempt_errors を追加（途中失敗を含む）
+    final_debug["attempt_errors"] = attempt_errors
+    
+    return final_debug

@@ -3,7 +3,7 @@ Ollama LLMクライアント実装
 """
 import logging
 from functools import lru_cache
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 import httpx
 
@@ -12,6 +12,86 @@ from app.llm.base import LLMClient, LLMTimeoutError, LLMInternalError
 
 # ロガー設定
 logger = logging.getLogger(__name__)
+
+
+def extract_ollama_text(raw: Any) -> Tuple[str, dict]:
+    """
+    Ollama APIレスポンスからテキストを抽出（複数形式対応）
+    
+    対応形式:
+    - dict["message"]["content"]（chat API）
+    - dict["response"]（generate API）
+    - dict["text"] / dict["content"]（保険）
+    - list（streaming、再帰的に連結）
+    - str（そのまま返す）
+    - その他（str変換）
+    
+    Args:
+        raw: Ollama APIからの生レスポンス
+        
+    Returns:
+        (抽出されたテキスト, デバッグ情報)
+    """
+    debug_info = {
+        "ollama_raw_type": type(raw).__name__,
+        "ollama_raw_keys": None,
+    }
+    
+    # Noneの場合
+    if raw is None:
+        return "", debug_info
+    
+    # strの場合（既に抽出済み）
+    if isinstance(raw, str):
+        return raw, debug_info
+    
+    # dictの場合（chat API / generate API）
+    if isinstance(raw, dict):
+        debug_info["ollama_raw_keys"] = list(raw.keys())
+        
+        # chat API形式: {"message": {"content": "..."}}
+        if "message" in raw and isinstance(raw["message"], dict):
+            content = raw["message"].get("content", "")
+            if content:
+                return str(content), debug_info
+        
+        # generate API形式: {"response": "..."}
+        if "response" in raw:
+            response = raw["response"]
+            if response:
+                return str(response), debug_info
+        
+        # 保険: {"text": "..."}
+        if "text" in raw:
+            text = raw["text"]
+            if text:
+                return str(text), debug_info
+        
+        # 保険: {"content": "..."}
+        if "content" in raw:
+            content = raw["content"]
+            if content:
+                return str(content), debug_info
+        
+        # どのキーも見つからない場合は空文字
+        logger.warning(f"Ollamaレスポンスから抽出できませんでした: keys={list(raw.keys())}")
+        return "", debug_info
+    
+    # listの場合（streaming形式、再帰的に連結）
+    if isinstance(raw, list):
+        parts = []
+        for item in raw:
+            text, _ = extract_ollama_text(item)
+            if text:
+                parts.append(text)
+        return "".join(parts), debug_info
+    
+    # その他の型（int, float等）はstr変換
+    try:
+        return str(raw), debug_info
+    except Exception as e:
+        logger.error(f"Ollama生レスポンスのstr変換に失敗: {type(raw).__name__}: {e}")
+        return "", debug_info
 
 
 class OllamaClient:
@@ -43,12 +123,13 @@ class OllamaClient:
         # APIエンドポイント
         self.chat_url = f"{self.base_url}/api/chat"
     
-    async def chat(self, messages: List[Dict[str, str]]) -> str:
+    async def chat(self, messages: List[Dict[str, str]], is_quiz: bool = False) -> str:
         """
         チャット形式でOllamaに問い合わせ、回答を取得
         
         Args:
             messages: メッセージリスト（[{"role": "system", "content": "..."}, ...]）
+            is_quiz: Quiz生成モード（JSON強制、生成上限適用）
             
         Returns:
             Ollamaからの回答テキスト
@@ -64,23 +145,58 @@ class OllamaClient:
             "stream": False,
         }
         
+        # Quiz専用最適化（JSON安定性と速度改善）
+        if is_quiz:
+            # Quiz専用モデルがあれば上書き
+            if settings.quiz_ollama_model:
+                payload["model"] = settings.quiz_ollama_model
+            
+            # format: json を強制（JSON安定性向上）
+            if settings.quiz_force_json:
+                payload["format"] = "json"
+            
+            # options: 生成上限、コンテキスト上限、temperature
+            payload["options"] = {
+                "num_predict": settings.quiz_ollama_num_predict,
+                "num_ctx": settings.quiz_ollama_num_ctx,
+                "temperature": settings.quiz_ollama_temperature,
+            }
+            
+            logger.info(
+                f"Quiz専用モード: model={payload['model']}, "
+                f"num_predict={settings.quiz_ollama_num_predict}, "
+                f"num_ctx={settings.quiz_ollama_num_ctx}, "
+                f"temperature={settings.quiz_ollama_temperature}, "
+                f"force_json={settings.quiz_force_json}"
+            )
+        
         try:
             # httpx.AsyncClient でリクエスト送信
             async with httpx.AsyncClient(timeout=self.timeout_sec) as client:
                 response = await client.post(self.chat_url, json=payload)
                 response.raise_for_status()  # HTTPエラーを例外に変換
                 
-                # レスポンスから回答を抽出
+                # レスポンスから回答を抽出（堅牢化版）
                 result = response.json()
                 
-                # Ollamaのレスポンス形式: {"message": {"role": "assistant", "content": "..."}}
-                if "message" in result and "content" in result["message"]:
-                    answer = result["message"]["content"]
-                    logger.info(f"Ollama回答取得成功: {len(answer)}文字")
-                    return answer
-                else:
-                    logger.error(f"Ollamaレスポンス形式が不正: {result}")
-                    raise LLMInternalError("Ollamaからのレスポンス形式が不正です")
+                # extract_ollama_text で複数形式に対応
+                answer, debug_info = extract_ollama_text(result)
+                
+                # デバッグログ（Quiz専用）
+                if is_quiz:
+                    logger.info(
+                        f"Ollama生レスポンス: type={debug_info['ollama_raw_type']}, "
+                        f"keys={debug_info['ollama_raw_keys']}, "
+                        f"extracted_chars={len(answer)}"
+                    )
+                
+                # 空応答チェック（Quiz専用）
+                if is_quiz and not answer.strip():
+                    logger.error(f"Ollamaが空応答を返しました: debug_info={debug_info}")
+                    raise LLMInternalError("empty_response")
+                
+                logger.info(f"Ollama回答取得成功: {len(answer)}文字")
+                return answer
         
         except httpx.TimeoutException as e:
             logger.error(f"Ollamaタイムアウト: {e}")

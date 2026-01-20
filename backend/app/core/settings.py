@@ -116,11 +116,78 @@ class Settings(BaseSettings):
         description="RRF（順位融合）のKパラメータ（小さいほど上位重視）"
     )
     
-    # Quiz救済ロジック設定
-    quiz_fallback_top_n: int = Field(
+    # Quiz専用検索設定（/ask とは独立、高速化重視）
+    quiz_semantic_weight: float = Field(
+        default=1.0,
+        alias="QUIZ_SEMANTIC_WEIGHT",
+        description="クイズ生成時のsemantic検索の重み（1.0=semantic単独）"
+    )
+    quiz_candidate_k: int = Field(
+        default=10,
+        alias="QUIZ_CANDIDATE_K",
+        description="クイズ生成時の候補取得件数（semantic検索、高速化のため小さめ）"
+    )
+    quiz_context_top_n: int = Field(
+        default=4,
+        alias="QUIZ_CONTEXT_TOP_N",
+        description="クイズ生成時にLLMに渡す引用の最大件数（厳格なタイムアウト対策）"
+    )
+    quiz_quote_max_len: int = Field(
+        default=200,
+        alias="QUIZ_QUOTE_MAX_LEN",
+        description="クイズ生成時の引用（quote）の最大文字数（厳格なタイムアウト対策）"
+    )
+    quiz_total_quote_max_chars: int = Field(
+        default=800,
+        alias="QUIZ_TOTAL_QUOTE_MAX_CHARS",
+        description="クイズ生成時の引用（quote）の総文字数上限（厳格なタイムアウト対策）"
+    )
+    quiz_rerank_enabled: bool = Field(
+        default=False,
+        alias="QUIZ_RERANK_ENABLED",
+        description="クイズ生成時のリランキング有効化（高速化のため原則OFF）"
+    )
+    quiz_rerank_max_n: int = Field(
+        default=6,
+        alias="QUIZ_RERANK_MAX_N",
+        description="クイズ生成時のリランク対象数上限（rerankを使う場合の制限）"
+    )
+    quiz_max_attempts: int = Field(
         default=2,
-        alias="QUIZ_FALLBACK_TOP_N",
-        description="Quiz生成時にcitationsが0件の場合、post_rerankから採用する最低件数"
+        alias="QUIZ_MAX_ATTEMPTS",
+        description="クイズ生成の最大試行回数（短い出力で確実に返す戦略）"
+    )
+    quiz_target_per_attempt: int = Field(
+        default=3,
+        alias="QUIZ_TARGET_PER_ATTEMPT",
+        description="1回の生成で狙う問題数（短い出力で確実に返す）"
+    )
+    
+    # Quiz専用サンプリング設定（教材からの出題に特化）
+    quiz_pool_max_ids_per_source: int = Field(
+        default=3000,
+        alias="QUIZ_POOL_MAX_IDS_PER_SOURCE",
+        description="Chunk Pool: 1sourceあたりの最大保持ID数"
+    )
+    quiz_pool_batch_size: int = Field(
+        default=5000,
+        alias="QUIZ_POOL_BATCH_SIZE",
+        description="Chunk Pool: Chroma collection.get() のバッチサイズ"
+    )
+    quiz_sample_multiplier: int = Field(
+        default=4,
+        alias="QUIZ_SAMPLE_MULTIPLIER",
+        description="サンプル数の倍率（sample_n = count * multiplier）"
+    )
+    quiz_sample_min_n: int = Field(
+        default=20,
+        alias="QUIZ_SAMPLE_MIN_N",
+        description="サンプル数の最小値"
+    )
+    quiz_citations_min: int = Field(
+        default=3,
+        alias="QUIZ_CITATIONS_MIN",
+        description="最低引用数（これ以下なら再取得）"
     )
 
     # Ollama設定（環境変数名を明示的に指定して事故防止）
@@ -135,9 +202,36 @@ class Settings(BaseSettings):
         description="使用するOllamaモデル名"
     )
     ollama_timeout_sec: int = Field(
-        default=30,
+        default=120,
         alias="OLLAMA_TIMEOUT_SEC",
-        description="Ollama API呼び出しのタイムアウト秒数"
+        description="Ollama API呼び出しのタイムアウト秒数（Quiz生成を考慮して長め）"
+    )
+    
+    # Quiz専用Ollama最適化設定（JSON安定性と速度改善）
+    quiz_ollama_model: str | None = Field(
+        default=None,
+        alias="QUIZ_OLLAMA_MODEL",
+        description="Quiz専用モデル名（未指定なら ollama_model を使用）"
+    )
+    quiz_ollama_num_predict: int = Field(
+        default=400,
+        alias="QUIZ_OLLAMA_NUM_PREDICT",
+        description="Quiz生成時の最大トークン数（厳格なタイムアウト対策、350-500推奨）"
+    )
+    quiz_ollama_num_ctx: int = Field(
+        default=4096,
+        alias="QUIZ_OLLAMA_NUM_CTX",
+        description="Quiz生成時のコンテキスト上限（長すぎ防止）"
+    )
+    quiz_ollama_temperature: float = Field(
+        default=0.2,
+        alias="QUIZ_OLLAMA_TEMPERATURE",
+        description="Quiz生成時の temperature（タイムアウト対策、大幅に下げる）"
+    )
+    quiz_force_json: bool = Field(
+        default=True,
+        alias="QUIZ_FORCE_JSON",
+        description="Quiz生成時に format=json を強制（JSON安定性向上、○のみ生成で推奨）"
     )
 
     # 将来のGEMINI APIキー（未使用）
