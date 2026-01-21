@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 def parse_quiz_json(
     response_text: str,
     fallback_citations: list[Citation],
+    count: int = 1,
 ) -> tuple[list[QuizItemSchema], str | None, str]:
     """
     LLMレスポンスからクイズをパース（○×問題専用、堅牢化版）
@@ -25,10 +26,12 @@ def parse_quiz_json(
     - JSON形式のパース（best effort）
     - statement フィールドの確認（question も互換性のため許容）
     - UUIDの生成
+    - count件に制限（LLMが余分に返しても先頭count件のみ処理）
     
     Args:
         response_text: LLMからのレスポンステキスト
         fallback_citations: パースに失敗した場合のフォールバック引用
+        count: 処理するクイズの最大数（デフォルト: 1）
         
     Returns:
         (items, parse_error, raw_excerpt) のタプル
@@ -38,6 +41,13 @@ def parse_quiz_json(
     """
     # raw_excerpt を保存（debug用）
     raw_excerpt = response_text[:200] if response_text else ""
+    
+    # [観測ログB] LLM生出力のプレビュー
+    logger.info(
+        f"[PARSE:RAW_PREVIEW] "
+        f"raw_len={len(response_text) if response_text else 0}, "
+        f"raw_head={response_text[:150] if response_text else 'EMPTY'}"
+    )
     
     # JSONブロックを抽出（堅牢版）
     response_text = response_text.strip()
@@ -65,10 +75,57 @@ def parse_quiz_json(
     if not isinstance(quizzes_data, list):
         return ([], "json_validation_error: 'quizzes' はリストである必要があります", raw_excerpt)
     
+    # LLMが余分に返した場合、先頭count件に制限（機械的truncate）
+    original_count = len(quizzes_data)
+    if len(quizzes_data) > count:
+        logger.info(f"[PARSE:TRUNCATE] LLMが{original_count}件返したため、先頭{count}件に制限")
+        quizzes_data = quizzes_data[:count]
+    
+    # [観測ログB] JSONのキーと各quizの型
+    logger.info(
+        f"[PARSE:JSON_KEYS] "
+        f"data_keys={list(data.keys())}, "
+        f"quizzes_count={len(quizzes_data)} (original={original_count})"
+    )
+    
+    # 各quizの型を確認
+    quiz_types = [type(q).__name__ for q in quizzes_data]
+    logger.info(
+        f"[PARSE:QUIZ_ITEM_TYPES] "
+        f"types={quiz_types}"
+    )
+    
     # 各クイズをパース
     quizzes = []
     for i, quiz_data in enumerate(quizzes_data):
         try:
+            # 救済: quiz_data が str の場合に dict へ変換
+            if isinstance(quiz_data, str):
+                logger.warning(f"クイズ {i} が str 形式のため dict に救済変換: {quiz_data[:50]}")
+                
+                # 文字列をstatementとして扱い、dictに変換
+                statement = quiz_data.strip()
+                
+                # 末尾が断言形になるよう不足なら「。」を付ける
+                if statement and not statement.endswith(("。", ".", "！", "!", "？", "?")):
+                    statement += "。"
+                
+                quiz_data = {
+                    "type": "true_false",
+                    "statement": statement,
+                    "answer_bool": True,  # ○のみ方針
+                    "explanation": "引用に基づく正しい断言文です。",
+                    # citations は fallback_citations の先頭3件を付与
+                    "citations": [
+                        {
+                            "source": c.source,
+                            "page": c.page,
+                            "quote": c.quote,
+                        }
+                        for c in fallback_citations[:3]
+                    ] if fallback_citations else []
+                }
+            
             quiz_item = _parse_single_quiz(quiz_data, i, fallback_citations)
             if quiz_item:
                 quizzes.append(quiz_item)
@@ -179,33 +236,75 @@ def _parse_single_quiz(
             logger.warning(f"クイズ {index} に statement も question もありません")
             return None
     
+    # false_statement フィールドの確認（観測ログ）
+    has_false_statement = "false_statement" in quiz_data and quiz_data.get("false_statement")
+    if has_false_statement:
+        false_stmt_preview = str(quiz_data["false_statement"])[:50]
+        logger.info(f"クイズ {index} に false_statement が含まれています: {false_stmt_preview}...")
+    
     # type のデフォルト値設定（○×固定）
     if "type" not in quiz_data:
         quiz_data["type"] = "true_false"
     
     # Citationをパース（LLMが返した場合）
     if "citations" in quiz_data and isinstance(quiz_data["citations"], list):
-        parsed_citations = []
-        for cit_data in quiz_data["citations"]:
-            # quote が空の場合は fallback_citations を使う
-            quote = cit_data.get("quote", "").strip()
-            if not quote and fallback_citations:
-                # fallback_citations から該当するものを探す（source が一致するもの）
-                source = cit_data.get("source", "")
-                fallback = next((c for c in fallback_citations if c.source == source), fallback_citations[0] if fallback_citations else None)
-                if fallback:
-                    quote = fallback.quote
+        # 空配列チェック（LLMが [] を返した場合）
+        if len(quiz_data["citations"]) == 0:
+            logger.warning(f"クイズ {index} の citations が空配列、fallback_citations を採用")
+            quiz_data["citations"] = fallback_citations[:3] if fallback_citations else []
+        else:
+            # 要素が全てdictかチェック（list[str]などの不正形式を検出）
+            all_dict = all(isinstance(item, dict) for item in quiz_data["citations"])
             
-            parsed_citations.append(
-                Citation(
-                    source=cit_data.get("source", ""),
-                    page=cit_data.get("page"),
-                    quote=quote,
+            if not all_dict:
+                # 要素にdict以外が混ざっている場合、LLM出力は捨ててfallbackを使用
+                # dict以外の要素を特定して詳細をログに記録
+                non_dict_items = [
+                    {"index": i, "type": type(item).__name__, "value": str(item)[:50]} 
+                    for i, item in enumerate(quiz_data["citations"]) 
+                    if not isinstance(item, dict)
+                ]
+                logger.warning(
+                    f"クイズ {index} の citations に dict 以外の要素: {non_dict_items}、"
+                    f"fallback_citations を採用"
                 )
-            )
-        quiz_data["citations"] = parsed_citations if parsed_citations else fallback_citations[:1]
+                quiz_data["citations"] = fallback_citations[:3] if fallback_citations else []
+            else:
+                # 全てdictの場合は従来通り処理
+                parsed_citations = []
+                for cit_data in quiz_data["citations"]:
+                    # source と quote の両方をチェック
+                    source = cit_data.get("source", "").strip()
+                    quote = cit_data.get("quote", "").strip()
+                    
+                    # source または quote が空の場合は fallback_citations を使う
+                    if (not source or not quote) and fallback_citations:
+                        logger.warning(
+                            f"クイズ {index} の citation に空フィールド（source={bool(source)}, quote={bool(quote)}）、"
+                            f"fallback を使用"
+                        )
+                        # fallback_citations から該当するものを探す（source が一致するもの）
+                        if source:
+                            fallback = next((c for c in fallback_citations if c.source == source), fallback_citations[0])
+                        else:
+                            fallback = fallback_citations[0]
+                        
+                        source = fallback.source
+                        quote = fallback.quote
+                    
+                    parsed_citations.append(
+                        Citation(
+                            source=source,
+                            page=cit_data.get("page"),
+                            quote=quote,
+                        )
+                    )
+                
+                # parsed_citations が空の場合もfallbackを使用（安全策）
+                quiz_data["citations"] = parsed_citations if parsed_citations else fallback_citations[:1]
     else:
         # citationsがない場合はfallbackを使用
+        logger.warning(f"クイズ {index} に citations がないため、fallback_citations を採用")
         quiz_data["citations"] = fallback_citations[:1] if fallback_citations else []
     
     # QuizItemSchemaにパース

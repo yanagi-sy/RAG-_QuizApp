@@ -15,9 +15,42 @@ from app.llm.prompt import build_quiz_generation_messages, build_quiz_json_fix_m
 from app.quiz.parser import parse_quiz_json
 from app.quiz.validator import validate_quiz_item
 from app.quiz.mutator import make_false_statement
+from app.quiz.postprocess import postprocess_quiz_item
 
 # ロガー設定
 logger = logging.getLogger(__name__)
+
+# 否定語パターン（LLMが勝手に×を作るのを防ぐ）
+NEGATIVE_PATTERNS = [
+    r'しない',
+    r'ではない',
+    r'ではありません',
+    r'とは限らない',
+    r'禁止',
+    r'不要',
+    r'必要ない',
+    r'してはいけない',
+    r'してはならない',
+    r'すべきではない',
+]
+
+
+def _contains_negative_phrase(statement: str) -> bool:
+    """
+    statement に否定語が含まれているかチェック
+    
+    Args:
+        statement: クイズの statement
+        
+    Returns:
+        True: 否定語が含まれている（×問題の可能性）
+        False: 否定語が含まれていない（○問題）
+    """
+    import re
+    for pattern in NEGATIVE_PATTERNS:
+        if re.search(pattern, statement):
+            return True
+    return False
 
 
 async def generate_and_validate_quizzes(
@@ -25,30 +58,39 @@ async def generate_and_validate_quizzes(
     count: int,
     topic: str | None,
     citations: list[Citation],
+    request_id: str | None = None,
+    attempt_index: int | None = None,
 ) -> tuple[list[QuizItemSchema], list[dict], list[dict], dict]:
     """
     LLMでクイズを生成し、バリデーションを行う（○のみ生成 → ×はmutatorで生成）
     
+    **重要**: この関数は count=1 専用です。複数問生成する場合は Router側でループしてください。
+    
     戦略:
-    1. LLMに count 件の「正しい断言文（○）」を生成させる
-    2. 各 item を validator でチェックし、合格したものを採用
-    3. 採用した各 item から、mutator で「×」を生成
+    1. LLMに1問の「正しい断言文（○）」を生成させる
+    2. item を validator でチェックし、合格したものを採用
+    3. 採用した item から、mutator で「×」を生成
     4. ×もvalidatorでチェックし、合格したものを採用
-    5. 最終的に count 件（○と×の組み合わせ）を揃える
+    5. 最終的に1問（○と×の組み合わせ）を返す
     
     Args:
         level: 難易度
-        count: 生成数
+        count: 生成数（count > 1 の場合は1に制限されます）
         topic: トピック
         citations: 引用リスト
         
     Returns:
         (accepted_quizzes, rejected_items, attempt_errors, generation_stats) のタプル
-        - accepted_quizzes: バリデーション通過したクイズのリスト
+        - accepted_quizzes: バリデーション通過したクイズのリスト（最大2件：○1件+×1件）
         - rejected_items: バリデーション失敗したアイテム情報のリスト
         - attempt_errors: 試行ごとの失敗履歴（途中失敗を含む）
         - generation_stats: 生成統計（generated_true_count, generated_false_count, dropped_reasons）
     """
+    # count=1 専用制限（複数問は Router側でループ）
+    if count > 1:
+        logger.warning(f"count={count} が指定されましたが、この関数は count=1 専用です。count=1 に制限します。")
+        count = 1
+    
     # settings をインポート（LLMパラメータ取得用）
     from app.core.settings import settings
     from app.llm.prompt import build_quiz_generation_messages
@@ -82,6 +124,8 @@ async def generate_and_validate_quizzes(
             count=count,
             topic=topic,
             citations=citations,
+            request_id=request_id,
+            attempt_index=attempt_index,
         )
         
         # LLM呼び出しで更新されたprompt_stats（llm_output_charsなど）をマージ
@@ -108,47 +152,127 @@ async def generate_and_validate_quizzes(
         # 空のクイズリストで続行（prompt_statsとattempt_errorsは保持）
         raw_true_quizzes = []
     
-    # バリデーション & mutator で○→×を生成
+    # バリデーション & false_statement処理（LLM優先、Mutator保険）
     accepted_true = []  # 採用された○
     accepted_false = []  # 採用された×
     rejected = []  # 不合格アイテム
     dropped_reasons = {}  # reason -> count の集計
+    llm_negative_rejected_count = 0  # LLM由来の否定文reject数
+    llm_false_generated_count = 0  # LLM由来の×生成数
+    mutator_false_generated_count = 0  # mutator由来の×生成数
+    sample_mutation_log = None  # true->false の例
+    false_source_stats = {"llm": 0, "mutator": 0, "none": 0}  # false_statement生成元の統計
     
     for quiz in raw_true_quizzes:
+        # 【修正】後処理を先に実行（statement正規化、explanation固定、citations選別）
+        try:
+            processed_quiz = postprocess_quiz_item(quiz)
+        except Exception as e:
+            logger.warning(f"後処理失敗: {e}、元のクイズを使用")
+            processed_quiz = quiz
+        
         # dict に変換してバリデーション（○）
-        quiz_dict = quiz.model_dump() if hasattr(quiz, "model_dump") else quiz.dict()
+        quiz_dict = processed_quiz.model_dump() if hasattr(processed_quiz, "model_dump") else processed_quiz.dict()
+        statement = quiz_dict.get("statement", "")
+        
+        # 否定語チェック（LLMが勝手に×を作るのを防ぐ）
+        if _contains_negative_phrase(statement):
+            logger.warning(f"LLM由来の否定文を reject: {statement[:50]}")
+            rejected.append({
+                "statement": statement[:100],
+                "reason": "llm_negative_phrase",
+            })
+            dropped_reasons["llm_negative_phrase"] = dropped_reasons.get("llm_negative_phrase", 0) + 1
+            llm_negative_rejected_count += 1
+            continue
+        
+        # validator チェック（○）
         ok, reason = validate_quiz_item(quiz_dict)
         
         if ok:
-            # ○として採用
-            accepted_true.append(quiz)
+            # ○として採用（正規化済み）
+            accepted_true.append(processed_quiz)
             
-            # ×を生成（mutator）
-            false_statement = make_false_statement(quiz_dict["statement"])
+            # ×を生成（LLM優先、Mutator保険）
+            original_statement = quiz_dict["statement"]
+            false_statement = None
+            false_source = "none"  # デフォルトは none
             
-            # ×がvalidatorを通過するかチェック
-            false_quiz_dict = quiz_dict.copy()
-            false_quiz_dict["id"] = str(uuid.uuid4())[:8]  # 新しいIDを生成
-            false_quiz_dict["statement"] = false_statement
-            false_quiz_dict["answer_bool"] = False
-            
-            # validator チェック（×）
-            ok_false, reason_false = validate_quiz_item(false_quiz_dict)
-            
-            if ok_false and false_statement != quiz_dict["statement"]:
-                # ×として採用
-                false_quiz = QuizItemSchema(**false_quiz_dict)
-                accepted_false.append(false_quiz)
+            # false_statementがLLMから返されているかチェック
+            llm_false_statement = quiz_dict.get("false_statement")
+            if llm_false_statement and isinstance(llm_false_statement, str) and llm_false_statement.strip():
+                false_statement = llm_false_statement.strip()
+                false_source = "llm"
+                logger.info(f"LLM由来のfalse_statementを使用: {false_statement[:50]}...")
             else:
-                # ×が不合格
-                logger.warning(f"False quiz バリデーション失敗: {reason_false}")
+                # false_statementがない or 空の場合、Mutatorで生成（保険）
+                logger.info(f"LLM由来のfalse_statementがないため、Mutatorで生成")
+                
+                # [観測ログA] Mutator直前のstatement確認
+                logger.info(
+                    f"[PIPE:BEFORE_MUTATOR] "
+                    f"request_id={request_id}, attempt_index={attempt_index}, "
+                    f"statement_preview={original_statement[:120]}, "
+                    f"statement_len={len(original_statement)}"
+                )
+                
+                false_statement = make_false_statement(original_statement)
+                false_source = "mutator"
+            
+            # false_statementが取得できた場合のみ処理
+            if false_statement and false_statement != original_statement:
+                # ×がvalidatorを通過するかチェック
+                false_quiz_dict = quiz_dict.copy()
+                false_quiz_dict["id"] = str(uuid.uuid4())[:8]  # 新しいIDを生成
+                false_quiz_dict["statement"] = false_statement
+                false_quiz_dict["answer_bool"] = False  # 必ず False
+                false_quiz_dict["false_statement"] = None  # ×問題にはfalse_statementは不要
+                
+                # validator チェック（×）
+                ok_false, reason_false = validate_quiz_item(false_quiz_dict)
+                
+                if ok_false:
+                    # ×として採用
+                    false_quiz = QuizItemSchema(**false_quiz_dict)
+                    accepted_false.append(false_quiz)
+                    
+                    # 統計更新
+                    if false_source == "llm":
+                        llm_false_generated_count += 1
+                        false_source_stats["llm"] += 1
+                    elif false_source == "mutator":
+                        mutator_false_generated_count += 1
+                        false_source_stats["mutator"] += 1
+                    
+                    # sample_mutation_log を1件だけ記録
+                    if sample_mutation_log is None:
+                        sample_mutation_log = {
+                            "true_statement": original_statement[:50],
+                            "false_statement": false_statement[:50],
+                            "false_source": false_source,
+                        }
+                else:
+                    # ×が不合格
+                    logger.warning(f"False quiz バリデーション失敗 (source={false_source}): {reason_false}")
+                    rejected.append({
+                        "statement": false_statement[:100],
+                        "reason": f"false:{reason_false}",
+                        "false_source": false_source,
+                    })
+                    # dropped_reasons に集計
+                    dropped_key = f"false:{reason_false}"
+                    dropped_reasons[dropped_key] = dropped_reasons.get(dropped_key, 0) + 1
+                    false_source_stats["none"] += 1
+            else:
+                # false_statementが取得できなかった or 元と同じ
+                logger.warning(f"False statementの生成に失敗 (source={false_source})")
                 rejected.append({
-                    "statement": false_statement[:100],
-                    "reason": f"false:{reason_false}",
+                    "statement": original_statement[:100],
+                    "reason": "false_generation_failed",
+                    "false_source": false_source,
                 })
-                # dropped_reasons に集計
-                dropped_key = f"false:{reason_false}"
-                dropped_reasons[dropped_key] = dropped_reasons.get(dropped_key, 0) + 1
+                dropped_reasons["false_generation_failed"] = dropped_reasons.get("false_generation_failed", 0) + 1
+                false_source_stats["none"] += 1
         else:
             # ○が不合格
             logger.warning(f"True quiz バリデーション失敗: {reason}")
@@ -173,7 +297,15 @@ async def generate_and_validate_quizzes(
         "generated_true_count": len(accepted_true),
         "generated_false_count": len(accepted_false),
         "dropped_reasons": dropped_reasons,
+        "llm_negative_rejected_count": llm_negative_rejected_count,
+        "llm_false_generated_count": llm_false_generated_count,
+        "mutator_false_generated_count": mutator_false_generated_count,
+        "false_source_stats": false_source_stats,
     }
+    
+    # sample_mutation_log が存在する場合のみ追加
+    if sample_mutation_log is not None:
+        generation_stats["sample_mutation_log"] = sample_mutation_log
     
     # プロンプト統計を全てマージ（prompt.pyとgenerator.pyで収集した値、LLMパラメータ含む）
     generation_stats.update(prompt_stats)
@@ -186,6 +318,14 @@ async def generate_and_validate_quizzes(
         f"output_chars={prompt_stats.get('llm_output_chars', 0)}"
     )
     
+    # 返却件数を count に強制（mutator等で○×2件になっても、count=1なら1件のみ返す）
+    if len(accepted) > count:
+        logger.info(f"生成数が count={count} を超えています（{len(accepted)}件）。count件にスライスします。")
+        accepted = accepted[:count]
+    
+    # 後処理は既にループ内で完了しているため、acceptedをそのまま返す
+    logger.info(f"後処理済みクイズ: {len(accepted)}件")
+    
     return (accepted, rejected, attempt_errors, generation_stats)
 
 
@@ -194,6 +334,8 @@ async def generate_quizzes_with_llm(
     count: int,
     topic: str | None,
     citations: list[Citation],
+    request_id: str | None = None,
+    attempt_index: int | None = None,
 ) -> tuple[list[QuizItemSchema], list[dict], dict]:
     """
     LLMでクイズを生成（3層ガード: Prompt強化 + Robust parse + JSON修復リトライ）
@@ -208,6 +350,8 @@ async def generate_quizzes_with_llm(
         count: 生成数
         topic: トピック
         citations: 引用リスト
+        request_id: リクエストID（Quiz観測用）
+        attempt_index: 試行インデックス（Quiz観測用）
         
     Returns:
         (quizzes, attempt_errors, prompt_stats) のタプル
@@ -258,7 +402,12 @@ async def generate_quizzes_with_llm(
     # Step 1: 通常の生成（1回のみ）
     try:
         t_llm_start = time.perf_counter()
-        raw_response = await llm_client.chat(messages=messages, is_quiz=True)
+        raw_response = await llm_client.chat(
+            messages=messages, 
+            is_quiz=True, 
+            request_id=request_id, 
+            attempt_index=attempt_index
+        )
         t_llm_ms = (time.perf_counter() - t_llm_start) * 1000
         
         # LLM生出力を正規化
@@ -270,9 +419,9 @@ async def generate_quizzes_with_llm(
         
         logger.info(f"LLM生成完了: {len(response_text) if response_text else 0}文字")
         
-        # JSONパース（堅牢版）
+        # JSONパース（堅牢版、count件に制限）
         t_parse_start = time.perf_counter()
-        quizzes, parse_error, raw_excerpt = parse_quiz_json(response_text, citations)
+        quizzes, parse_error, raw_excerpt = parse_quiz_json(response_text, citations, count)
         t_parse_ms = (time.perf_counter() - t_parse_start) * 1000
         
         # パース成功の場合
@@ -310,7 +459,12 @@ async def generate_quizzes_with_llm(
             
             try:
                 t_fix_llm_start = time.perf_counter()
-                raw_fix_response = await llm_client.chat(messages=fix_messages, is_quiz=True)
+                raw_fix_response = await llm_client.chat(
+                    messages=fix_messages, 
+                    is_quiz=True, 
+                    request_id=request_id, 
+                    attempt_index=attempt_index
+                )
                 t_fix_llm_ms = (time.perf_counter() - t_fix_llm_start) * 1000
                 
                 # LLM生出力を正規化
@@ -322,9 +476,9 @@ async def generate_quizzes_with_llm(
                 
                 logger.info(f"JSON修復LLM完了: {len(fix_response_text)}文字")
                 
-                # JSONパース（修復版）
+                # JSONパース（修復版、count件に制限）
                 t_fix_parse_start = time.perf_counter()
-                fix_quizzes, fix_parse_error, fix_raw_excerpt = parse_quiz_json(fix_response_text, citations)
+                fix_quizzes, fix_parse_error, fix_raw_excerpt = parse_quiz_json(fix_response_text, citations, count)
                 t_fix_parse_ms = (time.perf_counter() - t_fix_parse_start) * 1000
                 
                 # 修復成功の場合

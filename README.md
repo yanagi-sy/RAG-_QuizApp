@@ -12,6 +12,9 @@ RAG（Retrieval-Augmented Generation）を使ったQAとクイズアプリケー
   - **2026-01-20更新 (2)**: LLMには「○（正しい断言文）」のみ生成させ、×はコードで自動生成することで品質向上
   - **2026-01-20更新 (3)**: MVP版として生成数を3問に固定、タイムアウト対策として入力/出力を厳格に制限
   - **2026-01-20更新 (4)**: LLM負担計測機能を追加（prompt_chars, output_chars等）、Ollama応答抽出を堅牢化
+  - **2026-01-21更新 (5)**: Quiz不安定問題のデバッグ観測ログを追加（PIPE/PARSE/QUIZ_OBSERVE）、原因調査レポート作成
+  - **2026-01-21更新 (6)**: ImportError修正（quiz.py, judge.pyの不正なimportを削除）、サーバー起動問題を解決
+  - **2026-01-21更新 (7)**: Parser改修（count件にtruncate + citations堅牢化）、LLM不安定出力を機械的に安定化
 
 ## 技術要件
 
@@ -174,7 +177,10 @@ rag-quiz-app/
 │   ├── 03_API設計書.md
 │   ├── 04_詳細設計書.md
 │   ├── 05_進捗確認.md      # 設計書と現状実装の差分
-│   └── 06_リファクタリング記録.md # リファクタリング履歴
+│   ├── 06_リファクタリング記録.md # リファクタリング履歴
+│   ├── 09_技術スタックとデータフロー.md # 技術スタック・アーキテクチャ
+│   ├── REPORT_root_cause_quiz.md # Quiz不安定問題の原因調査レポート
+│   └── DEBUG_IMPLEMENTATION_SUMMARY.md # デバッグ観測ログ実装サマリ
 └── manuals/                # RAG取り込み対象（txt/pdf）
     └── sample.txt          # サンプルドキュメント
 ```
@@ -313,6 +319,35 @@ cd backend
 - statement は疑問形ではない宣言文
 - 曖昧表現・判定不能文が混ざらない（validatorで落ちる）
 - /ask の挙動・コード・設定に変更がない
+
+### Quiz不安定問題のデバッグ（2026-01-21追加）
+
+Quiz生成の火元（遅延/失敗/品質崩れ）を特定するための観測ログを実装しました。
+
+**観測ログ**:
+- `[PIPE:BEFORE_MUTATOR]`: Mutator実行前のstatement確認
+- `[PARSE:RAW_PREVIEW]`, `[PARSE:JSON_KEYS]`, `[PARSE:QUIZ_ITEM_TYPES]`: LLM出力とJSON型確認
+- `[QUIZ_OBSERVE:REQUEST]`, `[QUIZ_OBSERVE:RESPONSE]`: Ollama推論の観測
+
+**検証手順**:
+```bash
+cd backend
+./test_quiz_debug.sh
+```
+
+実行すると：
+- 3パターン（count=1/3, save=true含む）を各3回実行
+- 結果を `/tmp/quiz_debug_*/` に保存
+- サマリを自動生成
+
+**ドキュメント**:
+- `docs/REPORT_root_cause_quiz.md`: 原因調査レポート（火元の断定、修正方針）
+- `docs/DEBUG_IMPLEMENTATION_SUMMARY.md`: 実装内容の詳細
+
+**火元の仮説**:
+1. 🔥 後処理適用順序問題（Mutator前に正規化が未実行）
+2. 🔥 LLM出力型不整合（quizzes[i]がstrになる）
+3. 🔥 Ollama推論遅延（20〜60秒/問）
 
 ## ドキュメント取り込み
 
@@ -634,3 +669,60 @@ curl -X POST http://localhost:8000/quiz/generate \
     3. サーバーを再起動（起動時に自動的にインデックスが再構築されます）
     4. ログに "RAGインデックス作成完了" が表示されることを確認
 - **観測性**: 起動時にCHROMA_DIRの実パスをログ出力、検索時に件数・スコアをログ出力
+
+## トラブルシューティング
+
+### ImportError: cannot import name 'QuizItem' from 'app.quiz.store'
+
+**問題**: サーバー起動時に`quiz.py`または`judge.py`が存在しないモジュールをimportしようとしてエラーになる
+
+**原因**: 旧設計の`QuizItem`、`save_quiz`、`get_quiz`が削除されたが、importが残っている
+
+**解決策（2026-01-21に修正済み）**:
+- `backend/app/routers/quiz.py`: ダミー実装を簡略化、固定quiz_idを返す
+- `backend/app/routers/judge.py`: ダミー実装を簡略化、常にtrueが正解
+
+**確認方法**:
+```bash
+cd backend
+source .venv/bin/activate
+python -c "from app.main import app; print('✓ Import successful!')"
+```
+
+### Quiz生成が遅い・タイムアウトする
+
+**問題**: `/quiz/generate`が20〜60秒かかる、またはタイムアウトする
+
+**原因**:
+1. Ollama推論が遅い（モデルサイズ、CPU/GPU、num_ctx/num_predict）
+2. 後処理順序問題（Mutator前に正規化が未実行）
+3. LLM出力型不整合（救済処理が頻発）
+
+**デバッグ方法**:
+```bash
+cd backend
+./test_quiz_debug.sh
+cat /tmp/quiz_debug_*/REPORT_summary.txt
+```
+
+**観測ログ**:
+- `[QUIZ_OBSERVE:REQUEST]`: prompt_chars, num_predict, num_ctx等
+- `[QUIZ_OBSERVE:RESPONSE]`: total_duration_ns, eval_count等
+- `[PIPE:BEFORE_MUTATOR]`: statement_preview（【source】等が残っているか確認）
+- `[PARSE:QUIZ_ITEM_TYPES]`: types（strが含まれるか確認）
+
+**詳細**: `docs/REPORT_root_cause_quiz.md`を参照
+
+### /ask回帰テスト
+
+Quiz関連の修正後、/askが正常に動作することを確認：
+
+```bash
+curl -X POST http://localhost:8000/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"テスト質問"}' | jq '.answer, .citations | length'
+```
+
+期待結果:
+- `answer`が返る（LLM失敗時はnullでもOK）
+- `citations`が返る（最低1件以上）
