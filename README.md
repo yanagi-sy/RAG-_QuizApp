@@ -87,6 +87,33 @@ cp .env.example .env
 npm run dev
 ```
 
+## テスト実行
+
+### チャンク監査（強盗/万引き混在チェック）
+
+```bash
+cd backend
+source .venv/bin/activate
+python scripts/audit_chunks.py --keyword 強盗 --context-n 1
+
+# 結果確認
+cat ../docs/REPORT_chunk_audit.md
+```
+
+### /ask 回帰テスト（引用品質チェック）
+
+```bash
+cd backend
+source .venv/bin/activate
+python test_ask_citations.py
+```
+
+期待結果:
+- ✅ PASS: 強盗の質問
+- ✅ PASS: 防災の質問
+
+---
+
 ## ディレクトリ構成
 
 ```

@@ -39,7 +39,12 @@ def categorize_by_length(text_len: int) -> Category:
 
 def chunk_document(document: Document, chunk_size: int, chunk_overlap: int) -> List[DocumentChunk]:
     """
-    ドキュメントをチャンクに分割する
+    ドキュメントをチャンクに分割する（見出し境界で優先的に切る）
+    
+    戦略:
+    - 見出し（##, ###）が来たら、chunk_sizeに達していなくても強制的に切る
+    - overlapは見出しをまたがない（見出しの直前で終了）
+    - 見出しがない場合は従来通り固定長で切る
 
     Args:
         document: ドキュメント
@@ -49,6 +54,8 @@ def chunk_document(document: Document, chunk_size: int, chunk_overlap: int) -> L
     Returns:
         DocumentChunkのリスト
     """
+    import re
+    
     text = document.text
     text_len = len(text)
 
@@ -58,8 +65,18 @@ def chunk_document(document: Document, chunk_size: int, chunk_overlap: int) -> L
 
     while start < text_len:
         end = start + chunk_size
+        
+        # chunk_size範囲内に見出し（##, ###）があれば、そこで切る
         chunk_text = text[start:end]
-
+        
+        # 見出しパターン（行頭の ## または ###）
+        heading_match = re.search(r'\n(##+ )', chunk_text)
+        
+        if heading_match and heading_match.start() > 0:
+            # 見出しが見つかった場合、見出しの直前で切る
+            end = start + heading_match.start()
+            chunk_text = text[start:end]
+        
         # チャンクが空でない場合のみ追加
         if chunk_text.strip():
             chunks.append(
@@ -72,8 +89,14 @@ def chunk_document(document: Document, chunk_size: int, chunk_overlap: int) -> L
             )
             chunk_index += 1
 
-        # 次のチャンクの開始位置（overlap分戻る）
-        start = end - chunk_overlap
+        # 次のチャンクの開始位置
+        if heading_match and heading_match.start() > 0:
+            # 見出しで切った場合は、overlapなしで次の見出しから始める
+            start = end
+        else:
+            # 通常の場合はoverlap分戻る
+            start = end - chunk_overlap
+        
         if start >= text_len:
             break
 
