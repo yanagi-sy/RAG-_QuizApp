@@ -97,6 +97,7 @@ def query_chunks(
     collection: chromadb.Collection,
     query_embedding: List[float],
     top_k: int,
+    where_filter: dict = None,
 ) -> Tuple[List[str], List[dict], List[float]]:
     """
     チャンクを検索（semantic search）
@@ -105,14 +106,21 @@ def query_chunks(
         collection: ChromaDBコレクション
         query_embedding: 質問のEmbeddingベクトル
         top_k: 取得件数
+        where_filter: フィルタ条件（ChromaDBのwhere形式、None=フィルタなし）
         
     Returns:
         (documents, metadatas, distances) のタプル
     """
-    results = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=top_k,
-    )
+    query_kwargs = {
+        "query_embeddings": [query_embedding],
+        "n_results": top_k,
+    }
+    
+    # where_filterが指定されている場合は追加
+    if where_filter is not None:
+        query_kwargs["where"] = where_filter
+    
+    results = collection.query(**query_kwargs)
     
     # 結果を取得（query_embeddingsが1件なので最初の要素を取得）
     documents = results["documents"][0] if results["documents"] else []

@@ -58,6 +58,10 @@ class QuizGenerateRequest(BaseModel):
         default=False,
         description="デバッグ情報を返すかどうか"
     )
+    save: bool = Field(
+        default=False,
+        description="クイズセットを保存するかどうか"
+    )
 
 
 class QuizItem(BaseModel):
@@ -79,7 +83,35 @@ class QuizItem(BaseModel):
 class QuizGenerateResponse(BaseModel):
     """クイズ生成レスポンス"""
     quizzes: list[QuizItem] = Field(..., description="生成されたクイズのリスト")
+    quiz_set_id: Optional[str] = Field(
+        None,
+        description="保存されたクイズセットID（save=trueの場合のみ）"
+    )
     debug: Optional[Dict[str, Any]] = Field(
         None,
         description="デバッグ情報（debug=trueの場合のみ）"
     )
+
+
+class QuizSetMetadata(BaseModel):
+    """クイズセットメタデータ（一覧用）"""
+    id: str = Field(..., description="セットID")
+    title: str = Field(..., description="セットタイトル")
+    difficulty: Level = Field(..., description="難易度")
+    created_at: str = Field(..., description="作成日時（ISO形式）")
+    question_count: int = Field(..., description="問題数")
+
+
+class QuizSet(BaseModel):
+    """クイズセット"""
+    id: str = Field(..., description="セットID")
+    title: str = Field(..., description="セットタイトル")
+    difficulty: Level = Field(..., description="難易度")
+    created_at: str = Field(..., description="作成日時（ISO形式）")
+    quizzes: list[QuizItem] = Field(..., description="問題リスト")
+
+
+class QuizSetListResponse(BaseModel):
+    """クイズセット一覧レスポンス"""
+    quiz_sets: list[QuizSetMetadata] = Field(..., description="セットメタデータリスト")
+    total: int = Field(..., description="総件数")

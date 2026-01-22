@@ -15,6 +15,9 @@ RAG（Retrieval-Augmented Generation）を使ったQAとクイズアプリケー
   - **2026-01-21更新 (5)**: Quiz不安定問題のデバッグ観測ログを追加（PIPE/PARSE/QUIZ_OBSERVE）、原因調査レポート作成
   - **2026-01-21更新 (6)**: ImportError修正（quiz.py, judge.pyの不正なimportを削除）、サーバー起動問題を解決
   - **2026-01-21更新 (7)**: Parser改修（count件にtruncate + citations堅牢化）、LLM不安定出力を機械的に安定化
+  - **2026-01-22更新 (8)**: クイズセット機能を実装（5問セット生成、管理ページ、プレイページ、ファイル選択、難易度選択）
+  - **2026-01-22更新 (9)**: チャンキング改善（PDF見出し検出、サブセクション統合）、キーワード検索精度向上、品質確保ガイドライン作成
+  - **2026-01-22更新 (8)**: クイズセット機能を実装（5問セット生成、管理ページ、プレイページ、ファイル選択、難易度選択）
 
 ## 技術要件
 
@@ -64,7 +67,7 @@ cp .env.example .env
 # ※ ChromaDBの永続化ディレクトリを指定します。デフォルトは backend/.chroma です。
 
 # サーバーを起動
-uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --port 8000 --log-level info
 ```
 
 起動後、以下で動作確認：
@@ -85,6 +88,44 @@ cp .env.example .env
 
 # 開発サーバーを起動
 npm run dev
+```
+
+## ドキュメント設定
+
+### manualsディレクトリの使用
+
+本アプリケーションは `manuals/` ディレクトリ配下のドキュメントをQAとQuizの根拠として使用します。
+
+**対象ファイル**:
+- `manuals/*.txt` - テキストファイル
+- `manuals/*.pdf` - PDFファイル（テキスト抽出可能なもののみ）
+
+**現在の設定**:
+- `backend/app/core/settings.py` で `docs_dir: str = "manuals"` と設定されています
+- サーバー起動時に自動的にインデックスが構築されます
+
+### インデックス構築（手動）
+
+サーバー起動時に自動的に構築されますが、手動で再構築したい場合：
+
+```bash
+cd backend
+source .venv/bin/activate
+
+# 通常の構築（既存データがある場合はスキップ）
+python scripts/build_index.py
+
+# 強制的に再構築（既存データを削除して再構築）
+python scripts/build_index.py --force
+```
+
+**確認方法**:
+```bash
+# 読み込まれたドキュメントを確認
+python -c "from app.docs.loader import load_documents; from app.core.settings import settings; docs = load_documents(settings.docs_dir); print(f'読み込まれたドキュメント数: {len(docs)}'); sources = set(doc.source for doc in docs); print(f'ソースファイル: {sorted(sources)}')"
+
+# ChromaDBのチャンク数を確認
+python -c "from app.rag.vectorstore import get_vectorstore, get_collection_count; from app.core.settings import settings; collection = get_vectorstore(settings.chroma_dir); count = get_collection_count(collection); print(f'ChromaDBのチャンク数: {count}')"
 ```
 
 ## テスト実行
@@ -175,7 +216,14 @@ rag-quiz-app/
 │   │   ├── layout.tsx      # 共通レイアウト（ヘッダー）
 │   │   ├── page.tsx        # QAトップ（/）
 │   │   └── quiz/
-│   │       └── page.tsx     # クイズ画面（/quiz）
+│   │       ├── page.tsx     # クイズ画面（/quiz、旧実装）
+│   │       ├── generate/
+│   │       │   └── page.tsx # クイズ生成ページ（/quiz/generate）
+│   │       ├── manage/
+│   │       │   └── page.tsx # クイズ管理ページ（/quiz/manage）
+│   │       └── play/
+│   │           └── [id]/
+│   │               └── page.tsx # クイズプレイページ（/quiz/play/[id]）
 │   ├── features/           # 機能別コンポーネント
 │   │   ├── qa/             # QA機能
 │   │   │   ├── QAPage.tsx
@@ -222,7 +270,10 @@ rag-quiz-app/
 ### Frontend
 - **開発サーバー**: http://localhost:3000
 - **QAページ**: http://localhost:3000/
-- **クイズページ**: http://localhost:3000/quiz
+- **クイズ生成ページ**: http://localhost:3000/quiz/generate
+- **クイズ管理ページ**: http://localhost:3000/quiz/manage
+- **クイズプレイページ**: http://localhost:3000/quiz/play/[quiz_set_id]
+- **クイズページ（旧）**: http://localhost:3000/quiz
 
 ## APIエンドポイント
 
@@ -235,12 +286,15 @@ rag-quiz-app/
 - `POST /search` - チャンクを検索（キーワード検索＋2-gramフォールバック）
 
 ### Quiz
-- `POST /quiz/generate` - クイズを生成（難易度別、LLM統合、JSONパース＋バリデーション）
-- `POST /judge` - クイズの回答を判定（正誤判定のみ、解説生成は未実装）
+- `POST /quiz/generate` - クイズセットを生成（5問固定、難易度別、LLM統合、JSONパース＋バリデーション、自動保存）
+- `GET /quiz/sets` - クイズセットの一覧を取得（難易度・ソースIDでフィルタ可能）
+- `GET /quiz/sets/{quiz_set_id}` - クイズセットの詳細を取得
+- `DELETE /quiz/sets/{quiz_set_id}` - クイズセットを削除
+- `POST /judge` - クイズの回答を判定（正誤判定、解説、根拠を返す）
 
 ### Docs
 - `GET /docs/summary` - ドキュメントのサマリー（件数・文字数・チャンク数）
-- `GET /sources` - 資料一覧を取得（source_idsのリスト）
+- `GET /docs/sources` - 利用可能なソースファイルのリストを取得（クイズ生成時のファイル選択用）
 
 ## 技術ドキュメント
 
@@ -401,7 +455,7 @@ cd backend
    # サーバーを起動（起動時に自動的にインデックスが再構築される）
    cd backend
    source .venv/bin/activate  # 仮想環境が有効な場合
-   uvicorn app.main:app --reload --port 8000
+   python -m uvicorn app.main:app --reload --port 8000 --log-level info
    ```
 
 3. **反映確認の最短手順**:
@@ -485,7 +539,7 @@ PDFファイルが回答に参照されない場合、以下の手順で原因�
    # 3. サーバーを起動（起動時に自動的にインデックスが再構築される）
    cd backend
    source .venv/bin/activate  # 仮想環境が有効な場合
-   uvicorn app.main:app --reload --port 8000
+   python -m uvicorn app.main:app --reload --port 8000 --log-level info
    
    # 4. ログ確認（以下が表示されることを確認）
    # "CHROMA_DIR実パス: ..."
@@ -575,14 +629,36 @@ PDFファイルが回答に参照されない場合、以下の手順で原因�
   - 難易度別プロンプト生成
   - 再試行制御（LLMタイムアウト・パースエラー時に最大2回試行）
   - バリデーション統合
+  - 肯定文のみ生成（否定文はreject）
 - **JSONパース**（`parser.py`）:
   - マークダウンブロック対応
   - question → statement互換性対応
   - UUID自動生成
+  - citationsの堅牢化（形式エラー時はfallback使用）
 - **バリデーション**（`validator.py`）:
   - ○×問題専用バリデーション
   - 疑問形禁止（`?` `？` を除外）
   - citations の存在・内容チェック
+
+### クイズセット機能（2026-01-22追加）
+- **クイズ生成ページ** (`/quiz/generate`):
+  - ファイル選択（チェックボックス、全選択/全解除）
+  - 難易度選択（初級・中級・上級）
+  - 5問固定でクイズセットを生成・自動保存
+- **クイズ管理ページ** (`/quiz/manage`):
+  - 生成済みクイズセットの一覧表示
+  - プレイボタン（プレイページに遷移）
+  - 詳細ボタン（クイズ内容を確認）
+  - 削除ボタン（確認ダイアログ付き）
+- **クイズプレイページ** (`/quiz/play/[quiz_set_id]`):
+  - 5問のクイズセットを順番にプレイ
+  - ○×ボタンで回答
+  - 判定結果表示（正誤、正解、解説、根拠）
+  - 前の問題/次の問題へのナビゲーション
+- **クイズセット保存**:
+  - JSONファイルベース永続化（`backend/data/quiz_sets/`）
+  - サーバー再起動後も保持
+  - メタデータ（タイトル、難易度、作成日時、問題数）を管理
 
 ## LLM統合
 
@@ -653,6 +729,28 @@ curl -X POST http://localhost:8000/ask \
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"question":"機種依存文字が禁止なのはなぜ？", "retrieval": {"semantic_weight": 0.7}, "debug": true}' | jq '.debug'
+
+# 利用可能なソースファイルのリストを取得
+curl http://localhost:8000/docs/sources
+
+# クイズセットを生成（5問固定、自動保存）
+curl -X POST http://localhost:8000/quiz/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "level": "beginner",
+    "count": 5,
+    "source_ids": ["sample.txt"],
+    "save": true
+  }'
+
+# クイズセットの一覧を取得
+curl http://localhost:8000/quiz/sets
+
+# クイズセットの詳細を取得
+curl http://localhost:8000/quiz/sets/{quiz_set_id}
+
+# クイズセットを削除
+curl -X DELETE http://localhost:8000/quiz/sets/{quiz_set_id}
 
 # /quiz/generate で単独資料のクイズ生成テスト（debug=trueで段階別カウント確認）
 curl -X POST http://localhost:8000/quiz/generate \

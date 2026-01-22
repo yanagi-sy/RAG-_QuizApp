@@ -20,23 +20,27 @@ from app.rag.vectorstore import (
 logger = logging.getLogger(__name__)
 
 
-def build_index() -> None:
+def build_index(force_rebuild: bool = False) -> None:
     """
     manuals配下のドキュメントをインデックス化（ChromaDBに登録）
     
     - 既存のローダを流用してtxt/pdfを読み込む
     - Document -> chunk_document_for_rag() -> passages embedding -> upsert
-    - 初回のみ作成：コレクションに既にデータがあればスキップ
+    - force_rebuild=True の場合は既存データを無視して再構築
+    
+    Args:
+        force_rebuild: 既存データを無視して強制的に再構築するか
     """
     try:
         # ChromaDBコレクションを取得
         collection = get_vectorstore(settings.chroma_dir)
         
-        # 既にデータがある場合はスキップ
-        existing_count = get_collection_count(collection)
-        if existing_count > 0:
-            logger.info(f"インデックスは既に存在します（{existing_count}件）。スキップします。")
-            return
+        # 既にデータがある場合はスキップ（force_rebuild=Falseの場合）
+        if not force_rebuild:
+            existing_count = get_collection_count(collection)
+            if existing_count > 0:
+                logger.info(f"インデックスは既に存在します（{existing_count}件）。スキップします。")
+                return
         
         logger.info("RAGインデックス作成を開始します...")
         
@@ -47,13 +51,13 @@ def build_index() -> None:
             logger.warning(f"ドキュメントが見つかりません: {settings.docs_dir}")
             return
         
-        # 全チャンクを収集
+        # 全チャンクを収集（見出し境界優先チャンキング）
         all_chunks = []
         for doc in documents:
             chunks = chunk_document_for_rag(
                 doc,
-                chunk_size=settings.chunk_size,
-                chunk_overlap=settings.chunk_overlap,
+                chunk_size=settings.section_chunk_size,  # セクション単位のチャンクサイズ
+                chunk_overlap=settings.section_chunk_overlap,  # セクション単位のオーバーラップ
             )
             all_chunks.extend(chunks)
         

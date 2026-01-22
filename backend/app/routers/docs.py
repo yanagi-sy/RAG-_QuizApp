@@ -2,10 +2,12 @@
 Docs APIルーター
 """
 from fastapi import APIRouter
+from typing import List
 
 from app.core.settings import settings
 from app.docs.loader import load_documents, load_documents_by_file
 from app.docs.chunker import chunk_documents, chunk_file_documents
+from app.rag.vectorstore import get_vectorstore
 
 router = APIRouter()
 
@@ -53,3 +55,34 @@ async def get_docs_summary():
         "chunk_count": total_chunks,
         "files": files_info,
     }
+
+
+@router.get("/sources")
+async def get_available_sources() -> List[str]:
+    """
+    利用可能なソースファイルのリストを取得する（ChromaDBから）
+    
+    Returns:
+        ソースファイル名のリスト（ソート済み）
+    """
+    try:
+        collection = get_vectorstore(settings.chroma_dir)
+        
+        # ChromaDBから全チャンクを取得（メタデータのみ）
+        # 大量データの場合は効率化が必要だが、現状は全件取得
+        results = collection.get(limit=10000)  # 十分大きな値
+        
+        # ユニークなsourceを抽出
+        sources = set()
+        if results.get("metadatas"):
+            for metadata in results["metadatas"]:
+                source = metadata.get("source")
+                if source:
+                    sources.add(source)
+        
+        # ソートして返す
+        return sorted(list(sources))
+        
+    except Exception as e:
+        # エラー時は空リストを返す（フロントエンドでエラーハンドリング可能）
+        return []

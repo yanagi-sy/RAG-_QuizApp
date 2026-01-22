@@ -2,7 +2,7 @@
 アプリケーション設定
 """
 from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 
 
@@ -35,6 +35,17 @@ class Settings(BaseSettings):
         default=120,
         alias="CHUNK_OVERLAP",
         description="チャンクオーバーラップ（文字数）"
+    )
+    # 見出し境界優先チャンキング用設定
+    section_chunk_size: int = Field(
+        default=450,
+        alias="SECTION_CHUNK_SIZE",
+        description="セクション単位のチャンクサイズ（文字数）"
+    )
+    section_chunk_overlap: int = Field(
+        default=100,
+        alias="SECTION_CHUNK_OVERLAP",
+        description="セクション単位のチャンクオーバーラップ（文字数）"
     )
     top_k: int = Field(
         default=5,
@@ -96,7 +107,7 @@ class Settings(BaseSettings):
         description="リランク対象数の最大値"
     )
     rerank_score_threshold: float = Field(
-        default=-1.5,
+        default=-4.0,  # CHANGED: -2.5 → -4.0 に緩和（強盗質問で根拠が見つからない問題を解決）
         alias="RERANK_SCORE_THRESHOLD",
         description="Cross-Encoderスコア閾値（絶対値、これ以下は除外）"
     )
@@ -237,11 +248,14 @@ class Settings(BaseSettings):
     # 将来のGEMINI APIキー（未使用）
     # gemini_api_key: str = ""
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
-        populate_by_name = True  # Fieldのaliasとフィールド名の両方で読み込み可能
+    # Pydantic v2の設定（Configクラスの代わりにmodel_configを使用）
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        populate_by_name=True,  # Fieldのaliasとフィールド名の両方で読み込み可能
+        extra="ignore"  # 未定義の環境変数を無視（ANONYMIZED_TELEMETRYなど）
+    )
 
 
 # グローバル設定インスタンス

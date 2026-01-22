@@ -50,7 +50,7 @@ def get_chunks() -> List[DocumentChunk]:
     return _cached_chunks
 
 
-def search_chunks(query: str, k: int = 5) -> List[tuple[DocumentChunk, int]]:
+def search_chunks(query: str, k: int = 5, source_filter: Optional[List[str]] = None) -> List[tuple[DocumentChunk, int]]:
     """
     チャンクを検索する（暫定実装）
     
@@ -60,6 +60,7 @@ def search_chunks(query: str, k: int = 5) -> List[tuple[DocumentChunk, int]]:
     Args:
         query: 検索クエリ
         k: 取得件数
+        source_filter: ソースフィルタ（None=フィルタなし）
 
     Returns:
         (DocumentChunk, score)のリスト（score降順）
@@ -69,6 +70,10 @@ def search_chunks(query: str, k: int = 5) -> List[tuple[DocumentChunk, int]]:
     query = query.strip()
     if not query:
         return []
+    
+    # source_filterがある場合は事前にフィルタリング
+    if source_filter is not None:
+        chunks = [chunk for chunk in chunks if chunk.source in source_filter]
     
     # 既存の検索方法を試す
     scored_chunks = _search_keyword(query, chunks, k)
@@ -119,6 +124,44 @@ def _search_keyword(query: str, chunks: List[DocumentChunk], k: int) -> List[tup
         # 全文一致なら+5（高スコア、CHANGED: 3→5に引き上げ）
         if query_lower in text_lower:
             score += 5
+        
+        # NEW: 重要なキーワード（質問の核心部分）を抽出して評価
+        # 質問から重要な名詞を抽出（簡易版：2文字以上の連続文字列）
+        # ストップワードを除去して核心部分を抽出
+        stopwords = ["です", "か", "たら", "どう", "したら", "いい", "ですか", "？", "?", "が", "を", "に", "は", "の", "と", "で", "から", "まで", "より", "も", "や", "など"]
+        query_clean = query
+        for sw in stopwords:
+            query_clean = query_clean.replace(sw, " ")
+        query_clean = " ".join(query_clean.split())  # 連続空白を1つに
+        
+        # NEW: まず、既知の重要な単語（3文字以上）を直接検出
+        # これにより「強盗」「万引き」などの単語が確実に検出される
+        important_keywords = []
+        query_chars = query_clean.replace(" ", "")
+        
+        # 3文字以上の連続文字列を優先的に抽出（単語として認識しやすい）
+        if len(query_chars) >= 3:
+            for i in range(len(query_chars) - 2):
+                keyword = query_chars[i:i+3]
+                if keyword not in important_keywords:
+                    important_keywords.append(keyword)
+        
+        # 2文字の連続文字列も追加（補完用）
+        if len(query_chars) >= 2:
+            for i in range(len(query_chars) - 1):
+                keyword = query_chars[i:i+2]
+                if keyword not in important_keywords:
+                    important_keywords.append(keyword)
+        
+        # 重要なキーワードが含まれている場合は高スコア
+        # 特に「強盗」などの具体的な名詞が含まれている場合は最高スコア
+        for keyword in important_keywords:
+            if keyword in text_lower:
+                # 3文字以上のキーワードはより重要
+                if len(keyword) >= 3:
+                    score += 20  # CHANGED: 15→20に引き上げ（重要キーワード（3文字以上）マッチは最高スコア）
+                else:
+                    score += 10  # CHANGED: 8→10に引き上げ（重要キーワード（2文字）マッチは高スコア）
         
         # CHANGED: ストップワード除去後のトークンで評価
         if len(query_tokens) > 0:

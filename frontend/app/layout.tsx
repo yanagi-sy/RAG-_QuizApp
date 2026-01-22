@@ -38,10 +38,22 @@ export default function RootLayout({
                 QA
               </Link>
               <Link
-                href="/quiz"
+                href="/quiz/generate"
                 className="text-base font-medium text-gray-900 hover:text-gray-700 transition-colors"
               >
-                クイズ
+                クイズ生成
+              </Link>
+              <Link
+                href="/quiz/manage"
+                className="text-base font-medium text-gray-900 hover:text-gray-700 transition-colors"
+              >
+                クイズ管理
+              </Link>
+              <Link
+                href="/quiz"
+                className="text-base font-medium text-gray-500 hover:text-gray-700 transition-colors"
+              >
+                クイズ（旧）
               </Link>
             </div>
           </nav>

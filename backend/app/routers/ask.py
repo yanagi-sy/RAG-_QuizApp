@@ -438,6 +438,15 @@ def _hybrid_retrieval(
                 # 閾値を通過
                 threshold_passed += 1
                 
+                # NEW: 短いチャンク（見出しだけなど）を除外（50文字以下）
+                # これにより、見出しだけのチャンクが本文を含むチャンクと重複して返されることを防ぐ
+                if len(text.strip()) < 50:
+                    logger.info(
+                        f"短いチャンクを除外: source={source}, page={page}, "
+                        f"length={len(text.strip())}文字"
+                    )
+                    continue
+                
                 # 重複排除（source, page, quote先頭60文字）
                 quote_prefix = text[:60].strip()
                 quote_key = (source, page, quote_prefix)

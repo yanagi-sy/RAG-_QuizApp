@@ -404,9 +404,7 @@ async def generate_quizzes_with_llm(
         t_llm_start = time.perf_counter()
         raw_response = await llm_client.chat(
             messages=messages, 
-            is_quiz=True, 
-            request_id=request_id, 
-            attempt_index=attempt_index
+            is_quiz=True
         )
         t_llm_ms = (time.perf_counter() - t_llm_start) * 1000
         
@@ -461,9 +459,7 @@ async def generate_quizzes_with_llm(
                 t_fix_llm_start = time.perf_counter()
                 raw_fix_response = await llm_client.chat(
                     messages=fix_messages, 
-                    is_quiz=True, 
-                    request_id=request_id, 
-                    attempt_index=attempt_index
+                    is_quiz=True
                 )
                 t_fix_llm_ms = (time.perf_counter() - t_fix_llm_start) * 1000
                 

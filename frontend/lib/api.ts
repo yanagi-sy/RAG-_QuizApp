@@ -2,7 +2,11 @@
  * API呼び出し共通関数
  */
 
-import { ApiError, type ApiErrorResponse } from "./types";
+import { ApiError, type ApiErrorResponse, toApiError } from "./types";
+
+// toApiErrorをエクスポート（他のファイルで使用可能にする）
+export { toApiError };
+export type { ApiError };
 
 // 環境変数からbaseURLを取得（デフォルトはhttp://localhost:8000）
 const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -135,5 +139,98 @@ export async function judgeAnswer(
   return fetchApi("/judge", {
     method: "POST",
     body: JSON.stringify({ quiz_id, answer }),
+  });
+}
+
+/**
+ * GET /docs/sources API呼び出し
+ */
+export async function getAvailableSources(): Promise<string[]> {
+  return fetchApi("/docs/sources", {
+    method: "GET",
+  });
+}
+
+/**
+ * POST /quiz/generate API呼び出し
+ */
+export async function generateQuizSet(
+  level: "beginner" | "intermediate" | "advanced",
+  sourceIds?: string[]
+): Promise<{
+  quizzes: Array<{
+    id: string;
+    statement: string;
+    type: "true_false";
+    answer_bool: boolean;
+    explanation: string;
+    citations: Array<{ source: string; page: number; quote: string }>;
+  }>;
+  quiz_set_id: string | null;
+  debug?: any;
+}> {
+  return fetchApi("/quiz/generate", {
+    method: "POST",
+    body: JSON.stringify({
+      level,
+      count: 5, // 5問固定
+      source_ids: sourceIds || null,
+      save: true, // 自動保存
+    }),
+  });
+}
+
+/**
+ * GET /quiz/sets API呼び出し
+ */
+export async function listQuizSets(
+  level?: "beginner" | "intermediate" | "advanced"
+): Promise<{
+  quiz_sets: Array<{
+    id: string;
+    title: string;
+    difficulty: "beginner" | "intermediate" | "advanced";
+    created_at: string;
+    question_count: number;
+  }>;
+  total: number;
+}> {
+  const params = level ? `?level=${level}` : "";
+  return fetchApi(`/quiz/sets${params}`, {
+    method: "GET",
+  });
+}
+
+/**
+ * GET /quiz/sets/{id} API呼び出し
+ */
+export async function getQuizSet(id: string): Promise<{
+  id: string;
+  title: string;
+  difficulty: "beginner" | "intermediate" | "advanced";
+  created_at: string;
+  quizzes: Array<{
+    id: string;
+    statement: string;
+    type: "true_false";
+    answer_bool: boolean;
+    explanation: string;
+    citations: Array<{ source: string; page: number; quote: string }>;
+  }>;
+}> {
+  return fetchApi(`/quiz/sets/${id}`, {
+    method: "GET",
+  });
+}
+
+/**
+ * DELETE /quiz/sets/{id} API呼び出し
+ */
+export async function deleteQuizSet(id: string): Promise<{
+  message: string;
+  quiz_set_id: string;
+}> {
+  return fetchApi(`/quiz/sets/${id}`, {
+    method: "DELETE",
   });
 }

@@ -31,6 +31,12 @@ venv/
 ENV/
 env/
 
+# QuizSet Data
+backend/data/
+
+# ChromaDB
+backend/.chroma/
+
 # Environment variables
 .env
 .env.local
