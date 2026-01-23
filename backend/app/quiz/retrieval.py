@@ -68,8 +68,8 @@ def retrieve_for_quiz(
     
     # source_ids を NFC 正規化（1件のみ）
     source_ids = [unicodedata.normalize("NFC", source_ids[0])]
-    target_source = source_ids[0]
-    logger.info(f"[QuizRetrieval] 単一ソース指定: source={target_source}")
+    target_source = unicodedata.normalize("NFC", source_ids[0])  # 明示的にNFC正規化
+    logger.info(f"[QuizRetrieval] 単一ソース指定: source={target_source} (NFC正規化済み)")
     
     # サンプル数を決定（settings から取得）
     sample_n = max(count * settings.quiz_sample_multiplier, settings.quiz_sample_min_n)
@@ -108,11 +108,12 @@ def retrieve_for_quiz(
     # 【品質担保】指定source以外のchunkを除外
     filtered_chunks = []
     source_counts = {}  # デバッグ用：各sourceのchunk数をカウント
+    target_source_norm = unicodedata.normalize("NFC", target_source)  # 事前に正規化
+    
     for chunk_id, doc, meta in zip(ids, documents, metadatas):
         chunk_source = meta.get("source", "unknown")
         # Unicode正規化して比較（NFC正規化）
         chunk_source_norm = unicodedata.normalize("NFC", chunk_source)
-        target_source_norm = unicodedata.normalize("NFC", target_source)
         
         # デバッグ用：sourceをカウント
         source_counts[chunk_source] = source_counts.get(chunk_source, 0) + 1
@@ -120,7 +121,12 @@ def retrieve_for_quiz(
         if chunk_source_norm == target_source_norm:
             filtered_chunks.append((chunk_id, doc, meta))
         else:
-            logger.debug(f"[QuizRetrieval] ソース不一致のchunkを除外: source={chunk_source} (target={target_source})")
+            # デバッグログ：正規化前後の値を出力
+            logger.debug(
+                f"[QuizRetrieval] ソース不一致のchunkを除外: "
+                f"source={chunk_source} (norm={chunk_source_norm}) "
+                f"target={target_source} (norm={target_source_norm})"
+            )
     
     # デバッグログ：取得されたchunkのsource分布を出力
     if len(filtered_chunks) == 0:
@@ -158,8 +164,16 @@ def retrieve_for_quiz(
         page = metadata.get("page", 0)
         
         # 【品質担保】指定source以外のchunkを除外（念のため二重チェック）
-        if source != target_source:
-            logger.warning(f"[QuizRetrieval] citations作成時にソース不一致を検出: source={source} (target={target_source})")
+        # Unicode正規化して比較
+        source_norm = unicodedata.normalize("NFC", source)
+        target_source_norm = unicodedata.normalize("NFC", target_source)
+        
+        if source_norm != target_source_norm:
+            logger.warning(
+                f"[QuizRetrieval] citations作成時にソース不一致を検出: "
+                f"source={source} (norm={source_norm}) "
+                f"target={target_source} (norm={target_source_norm})"
+            )
             continue
         
         # 重複排除（source, page, quote先頭60文字）
@@ -220,17 +234,25 @@ def retrieve_for_quiz(
         # 【品質担保】指定source以外のchunkを除外
         filtered_chunks = []
         source_counts_retry = {}  # デバッグ用：各sourceのchunk数をカウント
+        target_source_norm = unicodedata.normalize("NFC", target_source)  # 事前に正規化
+        
         for chunk_id, doc, meta in zip(ids, documents, metadatas):
             chunk_source = meta.get("source", "unknown")
             # Unicode正規化して比較（NFC正規化）
             chunk_source_norm = unicodedata.normalize("NFC", chunk_source)
-            target_source_norm = unicodedata.normalize("NFC", target_source)
             
             # デバッグ用：sourceをカウント
             source_counts_retry[chunk_source] = source_counts_retry.get(chunk_source, 0) + 1
             
             if chunk_source_norm == target_source_norm:
                 filtered_chunks.append((chunk_id, doc, meta))
+            else:
+                # デバッグログ：正規化前後の値を出力
+                logger.debug(
+                    f"[QuizRetrieval] 再取得時のソース不一致: "
+                    f"source={chunk_source} (norm={chunk_source_norm}) "
+                    f"target={target_source} (norm={target_source_norm})"
+                )
         
         if len(filtered_chunks) == 0:
             logger.error(
@@ -259,8 +281,16 @@ def retrieve_for_quiz(
             page = metadata.get("page", 0)
             
             # 【品質担保】指定source以外のchunkを除外（念のため二重チェック）
-            if source != target_source:
-                logger.warning(f"[QuizRetrieval] 再取得時のcitations作成でソース不一致を検出: source={source} (target={target_source})")
+            # Unicode正規化して比較
+            source_norm = unicodedata.normalize("NFC", source)
+            target_source_norm = unicodedata.normalize("NFC", target_source)
+            
+            if source_norm != target_source_norm:
+                logger.warning(
+                    f"[QuizRetrieval] 再取得時のcitations作成でソース不一致を検出: "
+                    f"source={source} (norm={source_norm}) "
+                    f"target={target_source} (norm={target_source_norm})"
+                )
                 continue
             
             quote_prefix = text[:60].strip()
