@@ -82,10 +82,37 @@ def retrieve_for_quiz(
     
     # フィルタ後0件なら「根拠不足」で終了（他ソースへフォールバックしない）
     if len(sampled_ids) == 0:
-        logger.error(f"[QuizRetrieval] 指定ソース '{target_source}' からサンプルIDが0件です（根拠不足）")
+        # poolのキーを確認してデバッグ情報を出力
+        pool_keys = list(pool.keys())[:10]
+        logger.error(
+            f"[QuizRetrieval] 指定ソース '{target_source}' からサンプルIDが0件です（根拠不足）。"
+            f"poolのキー: {pool_keys}"
+        )
         return ([], {"error": f"指定ソース '{target_source}' から根拠が見つかりませんでした"})
     
+    # 【デバッグ】サンプルされたIDのsourceを確認（実際に取得して確認）
+    try:
+        sample_results = collection.get(
+            ids=sampled_ids[:10],  # 最初の10件のみ確認
+            include=["metadatas"]
+        )
+        sample_sources = {}
+        for meta in sample_results.get("metadatas", []):
+            src = meta.get("source", "unknown")
+            sample_sources[src] = sample_sources.get(src, 0) + 1
+        logger.info(f"[QuizRetrieval] サンプルされたIDのsource分布（最初の10件）: {sample_sources}")
+    except Exception as e:
+        logger.warning(f"[QuizRetrieval] サンプルIDのsource確認に失敗: {e}")
+    
     logger.info(f"[QuizRetrieval] {len(sampled_ids)}件のIDをサンプル（source={target_source}）")
+    
+    # 【品質担保】サンプルされたIDが0件の場合はエラーを返す
+    if len(sampled_ids) == 0:
+        logger.error(
+            f"[QuizRetrieval] サンプルIDが0件です。"
+            f"target_source={target_source}, pool_keys={list(pool.keys())[:10]}"
+        )
+        return ([], {"error": f"指定ソース '{target_source}' からサンプルIDが0件です（根拠不足）"})
     
     # chunkを取得
     try:
@@ -121,11 +148,12 @@ def retrieve_for_quiz(
         if chunk_source_norm == target_source_norm:
             filtered_chunks.append((chunk_id, doc, meta))
         else:
-            # デバッグログ：正規化前後の値を出力
-            logger.debug(
-                f"[QuizRetrieval] ソース不一致のchunkを除外: "
+            # 【重大】ソース不一致のchunkが検出された場合はエラーログを出力
+            logger.error(
+                f"[QuizRetrieval] 【重大】ソース不一致のchunkを検出: "
                 f"source={chunk_source} (norm={chunk_source_norm}) "
-                f"target={target_source} (norm={target_source_norm})"
+                f"target={target_source} (norm={target_source_norm}), "
+                f"chunk_id={chunk_id}, quote_preview={doc[:50] if doc else 'N/A'}..."
             )
     
     # デバッグログ：取得されたchunkのsource分布を出力

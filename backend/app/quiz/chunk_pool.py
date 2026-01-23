@@ -212,20 +212,31 @@ def sample_ids_multi_source(
     # source一覧を取得
     if sources:
         # 指定されたsourceのみ（NFC正規化）
-        target_sources = [unicodedata.normalize("NFC", s) for s in sources]
+        target_sources_norm = [unicodedata.normalize("NFC", s) for s in sources]
         # poolのキーもNFC正規化して比較
         pool_keys_norm = {unicodedata.normalize("NFC", k): k for k in pool.keys()}
-        target_sources = [pool_keys_norm.get(s, None) for s in target_sources]
-        target_sources = [s for s in target_sources if s is not None]
+        target_sources = []
         
-        # デバッグログ：マッチング結果を出力
+        for source_norm in target_sources_norm:
+            matched_key = pool_keys_norm.get(source_norm)
+            if matched_key:
+                target_sources.append(matched_key)
+            else:
+                # 【品質担保】マッチしない場合はエラーログを出力し、そのsourceをスキップ
+                logger.error(
+                    f"[ChunkPool] 指定されたsourceがpoolに存在しません: "
+                    f"specified={source_norm}, pool_keys={list(pool.keys())[:10]}"
+                )
+        
+        # 【品質担保】target_sourcesが空の場合はエラーを返す（全sourceからサンプルしない）
         if len(target_sources) == 0:
-            logger.warning(
-                f"[ChunkPool] 指定されたsourceがpoolに存在しません。"
-                f"指定source: {sources}, poolのキー: {list(pool.keys())[:5]}..."
+            logger.error(
+                f"[ChunkPool] 指定されたsourceがpoolに存在しません。空のリストを返します。"
+                f"指定source: {sources}, poolのキー: {list(pool.keys())[:10]}"
             )
+            return []
     else:
-        # 全source
+        # 全source（ただし、単一ソース固定のため通常は使用されない）
         target_sources = list(pool.keys())
     
     if len(target_sources) == 0:
@@ -257,7 +268,10 @@ def sample_ids_multi_source(
         )
         
         if len(ids) == 0:
-            logger.warning(f"[ChunkPool] source={source} からidsが0件です")
+            logger.error(
+                f"[ChunkPool] source={source} からidsが0件です。"
+                f"このsourceはスキップされますが、結果として空のリストが返される可能性があります。"
+            )
             continue
         
         sample_n = min(sample_n, len(ids))
@@ -266,6 +280,13 @@ def sample_ids_multi_source(
         
         logger.info(
             f"[ChunkPool] source={source}: {len(sampled)}件をサンプル（total={len(sampled_ids)}件）"
+        )
+    
+    # 【品質担保】sampled_idsが空の場合、エラーログを出力
+    if len(sampled_ids) == 0:
+        logger.error(
+            f"[ChunkPool] sample_ids_multi_source: サンプルされたIDが0件です。"
+            f"target_sources={target_sources}, sources={sources}"
         )
     
     # n 件を超えた場合は切り詰め
