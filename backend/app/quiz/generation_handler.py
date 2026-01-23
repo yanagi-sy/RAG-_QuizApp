@@ -5,6 +5,7 @@ generate_and_validate_quizzes を呼び出して、複数回試行する。
 """
 import logging
 import re
+import unicodedata
 from typing import Dict, Any
 
 from app.schemas.quiz import QuizGenerateRequest, QuizItem as QuizItemSchema
@@ -210,6 +211,7 @@ async def generate_quizzes_with_retry(
             
             # 使用可能なcitationsが少ない場合、または連続重複が多すぎる場合は、使用済みをリセット
             # 重複が多すぎて規定数に達しない問題を解決するため、より積極的にリセット
+            # 【改善】citationsを再取得するロジックを追加（retrieval.pyを呼び出す）
             should_reset = (
                 len(available_citations) < 3 or  # 3件未満の場合（より積極的にリセット）
                 consecutive_duplicates >= 3 or  # 連続3回重複した場合（より積極的にリセット）
@@ -223,6 +225,33 @@ async def generate_quizzes_with_retry(
                     f"(available={len(available_citations)}, consecutive_duplicates={consecutive_duplicates}, "
                     f"accepted={len(accepted_quizzes)})"
                 )
+                
+                # 【改善】citationsを再取得（retrieval.pyを呼び出す）
+                # リセットする前に、citationsを増やすことで、より多くの候補を確保
+                if attempts < max_attempts - 1 and len(citations) < target_count * 2:
+                    try:
+                        from app.quiz.retrieval import retrieve_for_quiz
+                        logger.info(
+                            f"[GENERATION_RETRY] citationsを再取得 "
+                            f"(current={len(citations)}, target={target_count * 2})"
+                        )
+                        new_citations, _ = retrieve_for_quiz(
+                            source_ids=request.source_ids,
+                            level=request.level,
+                            count=target_count * 2,  # 多めに取得
+                            debug=False
+                        )
+                        if len(new_citations) > 0:
+                            citations = new_citations
+                            logger.info(
+                                f"[GENERATION_RETRY] citations再取得完了: {len(citations)}件"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"[GENERATION_RETRY] citations再取得失敗: {type(e).__name__}: {e}, "
+                            f"既存のcitationsを使用します"
+                        )
+                
                 used_citation_keys.clear()
                 available_citations = citations
                 consecutive_duplicates = 0  # リセット時に連続重複もリセット
@@ -262,8 +291,33 @@ async def generate_quizzes_with_retry(
             processed_true_quizzes = []
             processed_false_quizzes = []
             
+            # 【品質担保】指定sourceを取得（source不一致チェック用）
+            expected_source = None
+            if request.source_ids and len(request.source_ids) > 0:
+                expected_source = unicodedata.normalize("NFC", request.source_ids[0])
+            
             # ○を処理
             for true_quiz in batch_true:
+                # 【品質担保】citationのsourceが指定ソースと一致することを確認
+                if expected_source and true_quiz.citations:
+                    for citation in true_quiz.citations:
+                        citation_source_norm = unicodedata.normalize("NFC", citation.source)
+                        if citation_source_norm != expected_source:
+                            logger.error(
+                                f"[GENERATION:SOURCE_MISMATCH] 【重大】citationのsourceが不一致: "
+                                f"expected={expected_source}, actual={citation.source} (norm={citation_source_norm}), "
+                                f"quiz_statement={true_quiz.statement[:50]}"
+                            )
+                            all_rejected_items.append({
+                                "statement": true_quiz.statement[:100],
+                                "reason": "source_mismatch",
+                                "expected_source": expected_source,
+                                "actual_source": citation.source,
+                            })
+                            consecutive_duplicates += 1
+                            # このクイズをスキップ（エラーとして扱う）
+                            continue
+                
                 # 重複チェック1: statementの重複
                 if _is_duplicate(true_quiz.statement, accepted_statements):
                     logger.warning(f"重複クイズを除外: '{true_quiz.statement[:50]}...'")
@@ -304,6 +358,26 @@ async def generate_quizzes_with_retry(
             # ×を処理（○から生成された×は、対応する○と同じcitationを使用している可能性が高い）
             # 対応する○が採用された場合、×も同じcitationを使用していても採用する
             for false_quiz in batch_false:
+                # 【品質担保】citationのsourceが指定ソースと一致することを確認
+                if expected_source and false_quiz.citations:
+                    for citation in false_quiz.citations:
+                        citation_source_norm = unicodedata.normalize("NFC", citation.source)
+                        if citation_source_norm != expected_source:
+                            logger.error(
+                                f"[GENERATION:SOURCE_MISMATCH] 【重大】citationのsourceが不一致（×）: "
+                                f"expected={expected_source}, actual={citation.source} (norm={citation_source_norm}), "
+                                f"quiz_statement={false_quiz.statement[:50]}"
+                            )
+                            all_rejected_items.append({
+                                "statement": false_quiz.statement[:100],
+                                "reason": "source_mismatch",
+                                "expected_source": expected_source,
+                                "actual_source": citation.source,
+                            })
+                            consecutive_duplicates += 1
+                            # このクイズをスキップ（エラーとして扱う）
+                            continue
+                
                 # 重複チェック1: statementの重複
                 if _is_duplicate(false_quiz.statement, accepted_statements):
                     logger.warning(f"重複クイズを除外: '{false_quiz.statement[:50]}...'")

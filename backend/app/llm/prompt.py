@@ -241,6 +241,16 @@ T13: 「【判断基準1・状況】かつ【判断基準2・状況】に該当�
     # topicの扱い
     topic_text = f"トピック: {topic}\n" if topic else ""
     
+    # 【品質担保】指定sourceのみを使用することを明示
+    source_constraint = ""
+    if citations and len(citations) > 0:
+        # citationsのsourceを取得（重複排除）
+        unique_sources = sorted(set(c.source for c in citations))
+        if len(unique_sources) == 1:
+            source_constraint = f"\n【重要】指定されたsourceのみを使用してください。\n指定source: {unique_sources[0]}\n他のsourceの内容を含めないでください。\n"
+        elif len(unique_sources) > 1:
+            source_constraint = f"\n【重要】指定されたsourceのみを使用してください。\n指定source: {', '.join(unique_sources)}\n他のsourceの内容を含めないでください。\n"
+    
     # userプロンプト（理解度を深める版）
     user_content = f"""JSONのみ出力。説明文禁止。
 
@@ -248,7 +258,7 @@ T13: 「【判断基準1・状況】かつ【判断基準2・状況】に該当�
 {topic_text}難易度: {level}
 問題数: {count}個（短い出力で確実に返す）
 使用テンプレート: {allowed_templates}
-
+{source_constraint}
 {context_text}
 
 要求:

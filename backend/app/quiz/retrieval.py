@@ -82,11 +82,21 @@ def retrieve_for_quiz(
     
     logger.info(f"[QuizRetrieval] {len(sampled_ids)}件のIDをサンプル")
     
-    # chunkを取得
+    # chunkを取得（sourceフィルタを事前に適用）
     try:
+        # 【品質担保】source_idsが指定されている場合、where条件でフィルタ
+        # ChromaDBのwhere条件でsourceフィルタを適用（取得前にフィルタ）
+        where_filter = None
+        if source_ids and len(source_ids) > 0:
+            # source_idsをNFC正規化（既に正規化済みだが念のため）
+            source_ids_norm = [unicodedata.normalize("NFC", s) for s in source_ids]
+            where_filter = {"source": {"$in": source_ids_norm}}
+            logger.info(f"[QuizRetrieval] sourceフィルタを適用: {source_ids_norm}")
+        
         results = collection.get(
             ids=sampled_ids,
-            include=["documents", "metadatas"]
+            include=["documents", "metadatas"],
+            where=where_filter  # ChromaDBのwhere条件でフィルタ
         )
     except Exception as e:
         logger.error(f"[QuizRetrieval] collection.get失敗: {type(e).__name__}: {e}")
@@ -100,7 +110,25 @@ def retrieve_for_quiz(
         logger.error("[QuizRetrieval] chunkが0件です")
         return ([], {"error": "chunkが0件です"})
     
-    logger.info(f"[QuizRetrieval] {len(documents)}件のchunkを取得")
+    # 【品質担保】取得後のchunkのsourceを確認（フィルタが正しく機能しているか検証）
+    if source_ids and len(source_ids) > 0:
+        source_counts = {}
+        for meta in metadatas:
+            chunk_source = meta.get("source", "unknown")
+            chunk_source_norm = unicodedata.normalize("NFC", chunk_source)
+            source_counts[chunk_source] = source_counts.get(chunk_source, 0) + 1
+            
+            # 指定source以外のchunkが混入していないかチェック
+            if chunk_source_norm not in source_ids:
+                logger.error(
+                    f"[QuizRetrieval] 【重大】指定source以外のchunkが混入: "
+                    f"source={chunk_source} (norm={chunk_source_norm}), "
+                    f"expected={source_ids}, chunk_id={ids[metadatas.index(meta)] if metadatas.index(meta) < len(ids) else 'N/A'}"
+                )
+        
+        logger.info(f"[QuizRetrieval] {len(documents)}件のchunkを取得（source分布: {source_counts}）")
+    else:
+        logger.info(f"[QuizRetrieval] {len(documents)}件のchunkを取得")
     
     # chunk_selector で levelに合う chunk を選択
     # まずは cit_min * 2 件選択（余裕を持たせる）
@@ -164,11 +192,18 @@ def retrieve_for_quiz(
         if len(sampled_ids) == 0:
             break
         
-        # chunk取得
+        # chunk取得（sourceフィルタを事前に適用）
         try:
+            # 【品質担保】source_idsが指定されている場合、where条件でフィルタ
+            where_filter = None
+            if source_ids and len(source_ids) > 0:
+                source_ids_norm = [unicodedata.normalize("NFC", s) for s in source_ids]
+                where_filter = {"source": {"$in": source_ids_norm}}
+            
             results = collection.get(
                 ids=sampled_ids,
-                include=["documents", "metadatas"]
+                include=["documents", "metadatas"],
+                where=where_filter  # ChromaDBのwhere条件でフィルタ
             )
         except Exception as e:
             logger.error(f"[QuizRetrieval] 再取得失敗: {type(e).__name__}: {e}")
