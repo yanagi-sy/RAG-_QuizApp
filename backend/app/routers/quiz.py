@@ -135,6 +135,51 @@ async def generate_quizzes_endpoint(request: QuizGenerateRequest) -> QuizGenerat
     t_llm_ms = (time.perf_counter() - t_llm_start) * 1000
     logger.info(f"[LLM:DONE] {t_llm_ms:.1f}ms, accepted={len(accepted_quizzes)}, attempts={attempts}")
     
+    # 【品質担保】規定数に達していない場合は422エラーを返す
+    if len(accepted_quizzes) < request.count:
+        shortage = request.count - len(accepted_quizzes)
+        logger.error(
+            f"[QUIZ_GENERATE] 規定数に達していません: "
+            f"accepted={len(accepted_quizzes)}, requested={request.count}, shortage={shortage}"
+        )
+        
+        # reject理由の内訳を集計
+        reject_reason_counts = {}
+        for item in rejected_items:
+            reason = item.get("reason", "unknown")
+            reject_reason_counts[reason] = reject_reason_counts.get(reason, 0) + 1
+        
+        # 最後に選べたcitation数を取得（aggregated_statsから取得）
+        final_available_citations = aggregated_stats.get("final_available_citations", len(citations))
+        
+        # debugレスポンスを構築（エラー情報を含む）
+        final_debug = build_debug_response(
+            request, quiz_debug_info, target_count,
+            len(citations), len(accepted_quizzes), rejected_items, error_info, attempts,
+            attempt_errors, aggregated_stats, t_retrieval_ms, t_llm_ms, 0
+        )
+        
+        # 不足情報を追加
+        final_debug["shortage"] = {
+            "requested": request.count,
+            "accepted": len(accepted_quizzes),
+            "shortage_count": shortage,
+            "reject_reason_counts": reject_reason_counts,
+            "final_available_citations": final_available_citations,
+        }
+        
+        # 422エラーを返す
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": f"クイズ生成が規定数（{request.count}問）に達しませんでした（生成数: {len(accepted_quizzes)}問）",
+                "shortage": shortage,
+                "reject_reason_counts": reject_reason_counts,
+                "final_available_citations": final_available_citations,
+                "debug": final_debug,
+            }
+        )
+    
     # 全体のタイミング計測
     t_total_ms = (time.perf_counter() - t_start) * 1000
     

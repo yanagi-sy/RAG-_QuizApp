@@ -547,6 +547,12 @@ async def generate_quizzes_with_retry(
             "message": f"目標数（{target_count}問）に達しませんでした（生成数: {len(accepted_quizzes)}問）",
         }
     
+    # 最後に選べたcitation数を計算
+    final_available_citations = len([
+        c for c in citations
+        if (c.source, c.page, c.quote[:60] if c.quote else "") not in used_citation_keys
+    ])
+    
     # 最終的な統計情報
     aggregated_stats["attempts"] = attempts
     aggregated_stats["exhausted"] = exhausted
@@ -554,12 +560,15 @@ async def generate_quizzes_with_retry(
     aggregated_stats["target_count"] = target_count
     aggregated_stats["final_true_count"] = len([q for q in accepted_quizzes if q.answer_bool])
     aggregated_stats["final_false_count"] = len([q for q in accepted_quizzes if not q.answer_bool])
+    aggregated_stats["final_available_citations"] = final_available_citations
+    aggregated_stats["total_citations"] = len(citations)
     
     logger.info(
         f"[GENERATION_RETRY] 完了: "
         f"attempts={attempts}, accepted={len(accepted_quizzes)}, target={target_count}, "
         f"exhausted={exhausted}, elapsed={total_elapsed_time:.1f}s, "
-        f"consecutive_duplicates={consecutive_duplicates}"
+        f"consecutive_duplicates={consecutive_duplicates}, "
+        f"final_available_citations={final_available_citations}"
     )
     
     return (

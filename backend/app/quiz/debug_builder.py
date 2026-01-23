@@ -125,9 +125,24 @@ def build_debug_response(
     # バリデーション失敗アイテムがあれば追加
     if rejected_items:
         debug_info["rejected_items"] = rejected_items[:10]  # 最大10件まで
+        
+        # reject理由の内訳を集計
+        reject_reason_counts = {}
+        for item in rejected_items:
+            reason = item.get("reason", "unknown")
+            reject_reason_counts[reason] = reject_reason_counts.get(reason, 0) + 1
+        debug_info["reject_reason_counts"] = reject_reason_counts
     
     # 集計統計情報を追加
     if aggregated_stats:
         debug_info["stats"] = aggregated_stats
+    
+    # 不足情報を追加（規定数に達していない場合）
+    if accepted_count < target_count:
+        debug_info["shortage"] = {
+            "requested": target_count,
+            "accepted": accepted_count,
+            "shortage_count": target_count - accepted_count,
+        }
     
     return debug_info

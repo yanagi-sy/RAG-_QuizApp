@@ -2,6 +2,10 @@
 クイズのバリデーション
 """
 import re
+import logging
+
+# ロガー設定
+logger = logging.getLogger(__name__)
 
 # 曖昧表現リスト（○×として判定不能な表現）
 AMBIGUOUS_PHRASES = [
@@ -54,6 +58,45 @@ FORBIDDEN_PHRASES = [
     "お願い",
     "？",  # 全角疑問符
     "?",   # 半角疑問符
+]
+
+# 禁止語パターン（引用に含まれる禁止表現）
+# quoteに含まれる場合、statementが肯定形ならreject
+FORBIDDEN_IN_QUOTE = [
+    "やってはいけない",
+    "禁止",
+    "厳禁",
+    "してはならない",
+    "行ってはならない",
+    "してはいけない",
+    "行ってはいけない",
+    "してはならない",
+    "行ってはならない",
+    "禁止されている",
+    "禁止する",
+    "禁止事項",
+]
+
+# 肯定形パターン（禁止語がある場合に肯定形かどうかを判定）
+AFFIRMATIVE_PATTERNS = [
+    r"する",
+    r"行う",
+    r"実行する",
+    r"実施する",
+    r"行うこと",
+    r"すること",
+]
+
+# 否定語パターン（statementに含まれる場合、肯定形ではないと判定）
+NEGATIVE_PATTERNS_IN_STATEMENT = [
+    r"しない",
+    r"行わない",
+    r"してはいけない",
+    r"行ってはいけない",
+    r"禁止",
+    r"厳禁",
+    r"してはならない",
+    r"行ってはならない",
 ]
 
 
@@ -139,9 +182,57 @@ def validate_quiz_item(item: dict) -> tuple[bool, str]:
         if not cit.get("source"):
             return (False, f"missing_citation_source:index={i}")
         
-        if not cit.get("quote"):
+        quote = cit.get("quote")
+        if not quote:
             return (False, f"missing_citation_quote:index={i}")
         
         # page は null でも OK（txt の場合）
+        
+        # 【品質担保】quoteに禁止語が含まれる場合、statementが肯定形ならreject
+        quote_text = str(quote)
+        has_forbidden_in_quote = any(forbidden in quote_text for forbidden in FORBIDDEN_IN_QUOTE)
+        
+        if has_forbidden_in_quote:
+            # statementが肯定形かどうかをチェック
+            is_affirmative = any(re.search(pattern, statement) for pattern in AFFIRMATIVE_PATTERNS)
+            has_negative = any(re.search(pattern, statement) for pattern in NEGATIVE_PATTERNS_IN_STATEMENT)
+            
+            # 肯定形で、かつ否定語を含まない場合、禁止セクションと矛盾している
+            if is_affirmative and not has_negative:
+                logger.warning(
+                    f"[VALIDATOR] 禁止語チェック失敗: quoteに禁止語があるのに、statementが肯定形で○になっています。"
+                    f"quote_preview={quote_text[:60]}..., statement={statement[:60]}..."
+                )
+                return (False, "contradict_forbidden_section")
+        
+        # 【品質担保】quote中の重要語がstatementに含まれるかチェック
+        # quoteから重要語を抽出（2文字以上の名詞・動詞を想定）
+        # 簡易実装：quote中の主要な単語がstatementに含まれるかチェック
+        # ただし、過検知を避けるため、quoteが短い場合（30文字未満）はスキップ
+        if len(quote_text) >= 30:
+            # quoteから主要な単語を抽出（ひらがな・カタカナ・漢字の連続、2文字以上）
+            quote_words = re.findall(r'[ひらがなカタカナ漢字ー]{2,}', quote_text)
+            # 2文字以上の単語のみを対象（ただし、一般的すぎる単語は除外）
+            common_words = ["こと", "もの", "ため", "とき", "場合", "とき", "よう", "こと", "もの", "ため"]
+            quote_keywords = [w for w in quote_words if len(w) >= 2 and w not in common_words]
+            
+            # statementに主要な単語が含まれているかチェック
+            # ただし、quoteが長すぎる場合はスキップ（過検知防止）
+            if len(quote_keywords) > 0 and len(quote_keywords) <= 10:
+                # 主要な単語のうち、少なくとも1つがstatementに含まれているか
+                found_keyword = False
+                for keyword in quote_keywords[:5]:  # 最大5語までチェック
+                    if keyword in statement:
+                        found_keyword = True
+                        break
+                
+                # 主要な単語が1つも含まれていない場合、根拠が弱い
+                # ただし、quoteが長すぎる場合（100文字以上）はスキップ（過検知防止）
+                if not found_keyword and len(quote_keywords) >= 2 and len(quote_text) < 100:
+                    logger.warning(
+                        f"[VALIDATOR] 重要語チェック失敗: quote中の主要な単語がstatementに含まれていません。"
+                        f"quote_keywords={quote_keywords[:5]}, statement={statement[:60]}..."
+                    )
+                    return (False, "not_grounded_terms")
     
     return (True, "")
