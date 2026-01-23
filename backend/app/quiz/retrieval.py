@@ -234,11 +234,13 @@ def retrieve_for_quiz(
             quote = text[:max_len] if len(text) > max_len else text
             
             # 【品質担保】citation作成時にquoteの内容とsourceが一致しているか確認
-            # 火災関連のキーワードが含まれている場合、sourceがsample3.txtでないことを確認
+            # 火災関連のキーワードが含まれている場合、sourceがsample*.txtでないことを確認
+            # （火災関連の内容は「防犯・災害対応マニュアル（サンプル）.pdf」に含まれるべき）
             fire_keywords = ["火災", "避難", "災害", "防犯"]
             has_fire_content = any(keyword in quote for keyword in fire_keywords)
             
-            if has_fire_content and "sample3.txt" in source:
+            # sample*.txtファイルに火災関連の内容が含まれている場合は不一致として検出
+            if has_fire_content and source.startswith("sample") and source.endswith(".txt"):
                 logger.error(
                     f"[QuizRetrieval] 【重大】citation作成時にsourceと内容の不一致を検出: "
                     f"source={source}, quote_preview={quote[:100]}..., "

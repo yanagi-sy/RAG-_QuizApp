@@ -257,11 +257,13 @@ def _parse_single_quiz(
         primary_citation = fallback_citations[0]
         
         # 【品質担保】citationのsourceとquoteの内容が一致しているか確認
-        # 火災関連のキーワードが含まれている場合、sourceがsample3.txtでないことを確認
+        # 火災関連のキーワードが含まれている場合、sourceがsample*.txtでないことを確認
+        # （火災関連の内容は「防犯・災害対応マニュアル（サンプル）.pdf」に含まれるべき）
         fire_keywords = ["火災", "避難", "災害", "防犯"]
         has_fire_content = any(keyword in primary_citation.quote for keyword in fire_keywords)
         
-        if has_fire_content and "sample3.txt" in primary_citation.source:
+        # sample*.txtファイルに火災関連の内容が含まれている場合は不一致として検出
+        if has_fire_content and primary_citation.source.startswith("sample") and primary_citation.source.endswith(".txt"):
             logger.error(
                 f"[PARSE] 【重大】citationのsourceと内容の不一致を検出: "
                 f"source={primary_citation.source}, quote_preview={primary_citation.quote[:100]}..., "
