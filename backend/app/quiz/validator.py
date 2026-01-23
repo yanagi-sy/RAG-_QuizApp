@@ -188,7 +188,7 @@ def validate_quiz_item(item: dict) -> tuple[bool, str]:
         
         # page は null でも OK（txt の場合）
         
-        # 【品質担保】quoteに禁止語が含まれる場合、statementが肯定形ならreject
+        # 【品質担保】quoteに禁止語が含まれる場合、statementが禁止されている行為を肯定形で記述していないかチェック
         quote_text = str(quote)
         has_forbidden_in_quote = any(forbidden in quote_text for forbidden in FORBIDDEN_IN_QUOTE)
         
@@ -197,13 +197,48 @@ def validate_quiz_item(item: dict) -> tuple[bool, str]:
             is_affirmative = any(re.search(pattern, statement) for pattern in AFFIRMATIVE_PATTERNS)
             has_negative = any(re.search(pattern, statement) for pattern in NEGATIVE_PATTERNS_IN_STATEMENT)
             
-            # 肯定形で、かつ否定語を含まない場合、禁止セクションと矛盾している
+            # 肯定形で、かつ否定語を含まない場合、禁止されている行為をstatementに含めていないかチェック
             if is_affirmative and not has_negative:
-                logger.warning(
-                    f"[VALIDATOR] 禁止語チェック失敗: quoteに禁止語があるのに、statementが肯定形で○になっています。"
-                    f"quote_preview={quote_text[:60]}..., statement={statement[:60]}..."
-                )
-                return (False, "contradict_forbidden_section")
+                # 禁止事項が含まれるcitationでも、禁止されていない別の行為をstatementに含めることは許容する
+                # 禁止されている行為がstatementに直接含まれている場合のみreject
+                # 例: quote="店外での身体接触をしてはいけない" → statement="店外での身体接触を行う" → reject
+                # 例: quote="店外での身体接触をしてはいけない。警察に通報する。" → statement="警察に通報する" → OK
+                
+                # 禁止されている行為を抽出（簡易実装：禁止語の前後の文を抽出）
+                # 禁止語の前後30文字を抽出して、statementに含まれているかチェック
+                forbidden_behaviors = []
+                for forbidden in FORBIDDEN_IN_QUOTE:
+                    if forbidden in quote_text:
+                        # 禁止語の前後30文字を抽出
+                        idx = quote_text.find(forbidden)
+                        start = max(0, idx - 30)
+                        end = min(len(quote_text), idx + len(forbidden) + 30)
+                        context = quote_text[start:end]
+                        # 禁止語の前の部分（禁止されている行為）を抽出
+                        before = quote_text[max(0, idx - 50):idx].strip()
+                        if before:
+                            # 禁止されている行為のキーワードを抽出（名詞・動詞など）
+                            # 簡易実装：禁止語の直前の10-30文字を抽出
+                            behavior_keywords = re.findall(r'[ひらがなカタカナ漢字ー]{2,}', before[-30:])
+                            if behavior_keywords:
+                                forbidden_behaviors.extend(behavior_keywords)
+                
+                # statementに禁止されている行為のキーワードが含まれているかチェック
+                # ただし、一般的すぎる単語（「こと」「もの」「ため」など）は除外
+                common_words = ["こと", "もの", "ため", "とき", "場合", "よう", "こと", "もの", "ため", "対応", "対処", "確認", "行う", "する"]
+                forbidden_keywords = [w for w in forbidden_behaviors if len(w) >= 2 and w not in common_words]
+                
+                # statementに禁止されている行為のキーワードが含まれている場合のみreject
+                if forbidden_keywords:
+                    statement_words = re.findall(r'[ひらがなカタカナ漢字ー]{2,}', statement)
+                    has_forbidden_behavior = any(keyword in statement for keyword in forbidden_keywords if len(keyword) >= 3)
+                    
+                    if has_forbidden_behavior:
+                        logger.warning(
+                            f"[VALIDATOR] 禁止語チェック失敗: quoteに禁止語があり、statementに禁止されている行為が含まれています。"
+                            f"quote_preview={quote_text[:60]}..., statement={statement[:60]}..., forbidden_keywords={forbidden_keywords[:3]}"
+                        )
+                        return (False, "contradict_forbidden_section")
         
         # 【品質担保】quote中の重要語がstatementに含まれるかチェック
         # quoteから重要語を抽出（2文字以上の名詞・動詞を想定）
