@@ -164,9 +164,9 @@ class Settings(BaseSettings):
         description="クイズ生成時のリランク対象数上限（rerankを使う場合の制限）"
     )
     quiz_max_attempts: int = Field(
-        default=2,
+        default=10,  # CHANGED: 2 → 10 に増加（5問生成に対応、各試行で○×2件生成するため最低3回必要）
         alias="QUIZ_MAX_ATTEMPTS",
-        description="クイズ生成の最大試行回数（短い出力で確実に返す戦略）"
+        description="クイズ生成の最大試行回数（各試行で○×2件生成するため、目標数に応じて調整）"
     )
     quiz_target_per_attempt: int = Field(
         default=3,

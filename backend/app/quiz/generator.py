@@ -216,8 +216,56 @@ async def generate_and_validate_quizzes(
                     f"statement_len={len(original_statement)}"
                 )
                 
+                # Mutatorで生成（複数回試行）
                 false_statement = make_false_statement(original_statement)
                 false_source = "mutator"
+                
+                # Mutatorが失敗した場合（元の文と同じ）、別の方法を試す
+                if false_statement == original_statement:
+                    logger.info("Mutator初回試行が失敗したため、代替方法を試行します")
+                    
+                    # 代替方法1: 文末の否定化を試す（より積極的）
+                    alternative_patterns = [
+                        (r"行う。$", "行わない。"),
+                        (r"確認する。$", "確認しない。"),
+                        (r"連絡する。$", "連絡しない。"),
+                        (r"報告する。$", "報告しない。"),
+                        (r"実施する。$", "実施しない。"),
+                        (r"実行する。$", "実行しない。"),
+                        (r"処理する。$", "処理しない。"),
+                        (r"対応する。$", "対応しない。"),
+                        (r"である。$", "ではない。"),
+                        (r"する。$", "しない。"),
+                        (r"できる。$", "できない。"),
+                        (r"される。$", "されない。"),
+                        (r"ある。$", "ない。"),
+                    ]
+                    
+                    import re
+                    for pattern, replacement in alternative_patterns:
+                        if re.search(pattern, original_statement):
+                            false_statement = re.sub(pattern, replacement, original_statement)
+                            if false_statement != original_statement:
+                                logger.info(f"代替方法で×問題を生成: パターン '{pattern}' を適用")
+                                break
+                    
+                    # 代替方法2: "必ず"を削除して「行わなくてもよい」に変換
+                    if false_statement == original_statement and "必ず" in original_statement:
+                        false_statement = original_statement.replace("必ず", "").replace("  ", " ").strip()
+                        if false_statement != original_statement:
+                            logger.info("代替方法で×問題を生成: '必ず'を削除")
+                    
+                    # 代替方法3: "必須"を"任意"に変換
+                    if false_statement == original_statement and "必須" in original_statement:
+                        false_statement = original_statement.replace("必須", "任意")
+                        if false_statement != original_statement:
+                            logger.info("代替方法で×問題を生成: '必須'を'任意'に変換")
+                    
+                    # 代替方法4: "必要"を"不要"に変換
+                    if false_statement == original_statement and "必要" in original_statement:
+                        false_statement = original_statement.replace("必要", "不要")
+                        if false_statement != original_statement:
+                            logger.info("代替方法で×問題を生成: '必要'を'不要'に変換")
             
             # false_statementが取得できた場合のみ処理
             if false_statement and false_statement != original_statement:
@@ -318,13 +366,10 @@ async def generate_and_validate_quizzes(
         f"output_chars={prompt_stats.get('llm_output_chars', 0)}"
     )
     
-    # 返却件数を count に強制（mutator等で○×2件になっても、count=1なら1件のみ返す）
-    if len(accepted) > count:
-        logger.info(f"生成数が count={count} を超えています（{len(accepted)}件）。count件にスライスします。")
-        accepted = accepted[:count]
-    
-    # 後処理は既にループ内で完了しているため、acceptedをそのまま返す
-    logger.info(f"後処理済みクイズ: {len(accepted)}件")
+    # CHANGED: count=1の場合でも○と×の両方を返す（generation_handler.pyで管理するため）
+    # generation_handler.pyで5問生成する場合、各試行で○と×の両方が必要
+    # そのため、ここでは○と×の両方を返す（スライスしない）
+    logger.info(f"後処理済みクイズ: {len(accepted)}件（○={len(accepted_true)}件, ×={len(accepted_false)}件）")
     
     return (accepted, rejected, attempt_errors, generation_stats)
 
