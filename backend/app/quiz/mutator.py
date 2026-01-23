@@ -34,6 +34,9 @@ NEGATION_RULES = [
     ("必ず確認する", "確認しなくてもよい"),
     ("必ず連絡する", "連絡しなくてもよい"),
     ("必ず報告する", "報告しなくてもよい"),
+    ("必ず持つ", "持たなくてもよい"),
+    ("必ず携帯する", "携帯しなくてもよい"),
+    ("必ず所持する", "所持しなくてもよい"),
     ("必須である", "任意である"),
     ("必要である", "不要である"),
     ("必要がある", "必要がない"),
@@ -163,8 +166,10 @@ def make_false_statement(statement: str) -> str:
         return statement[:-5] + "対応しない。"
     elif "必ず" in statement:
         # "必ず"を含む場合は削除して「行わなくてもよい」に変換
+        # ただし、「必ず持つ」「必ず携帯する」などの特定パターンは既に処理済み
         mutated = statement.replace("必ず", "").replace("  ", " ").strip()
         if mutated != original:
+            logger.info("Mutator成功: '必ず'を削除")
             return mutated
     elif "必須" in statement:
         # "必須"を"任意"に変換

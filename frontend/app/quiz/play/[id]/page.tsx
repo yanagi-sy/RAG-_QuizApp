@@ -122,10 +122,10 @@ export default function QuizPlayPage() {
           <div className="bg-red-50 border border-red-200 rounded-xl p-4">
             <div className="text-sm text-red-700">{error.message}</div>
             <button
-              onClick={() => router.push("/quiz/manage")}
+              onClick={() => router.push("/quiz")}
               className="mt-4 text-sm text-blue-600 hover:text-blue-700"
             >
-              管理ページに戻る
+              クイズページに戻る
             </button>
           </div>
         </div>
@@ -277,7 +277,7 @@ export default function QuizPlayPage() {
             </button>
             {isLast ? (
               <button
-                onClick={() => router.push("/quiz/manage")}
+                onClick={() => router.push("/quiz")}
                 className="h-12 min-w-[120px] rounded-xl bg-blue-600 px-4 text-base font-medium text-white hover:bg-blue-700 transition-colors"
               >
                 完了

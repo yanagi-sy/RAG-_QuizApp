@@ -97,6 +97,9 @@ async def generate_quizzes_with_retry(
     consecutive_duplicates = 0  # 連続重複回数（無限ループ防止）
     max_consecutive_duplicates = 10  # 最大連続重複回数
     
+    # 重複対策: 使用済みcitationsを記録（同じcitationから同じクイズが生成されるのを防ぐ）
+    used_citation_keys = set()
+    
     logger.info(
         f"[GENERATION_RETRY] 開始: target={target_count}, max_attempts={max_attempts} "
         f"(base={base_max_attempts}, calculated={calculated_max_attempts})"
@@ -114,12 +117,33 @@ async def generate_quizzes_with_retry(
         )
         
         try:
+            # 重複対策: 使用済みcitationsを除外したcitationsを生成に使用
+            # 各試行で異なるcitationsを使うことで、多様なクイズを生成
+            available_citations = [
+                c for c in citations
+                if (c.source, c.page, c.quote[:60] if c.quote else "") not in used_citation_keys
+            ]
+            
+            # 使用可能なcitationsが少ない場合は、使用済みをリセット
+            if len(available_citations) < 3:
+                logger.info(f"[GENERATION_RETRY] 使用可能なcitationsが少ないため、使用済みリストをリセット")
+                used_citation_keys.clear()
+                available_citations = citations
+            
+            # 使用可能なcitationsからランダムに選択（多様性を確保）
+            import random
+            if len(available_citations) > 5:
+                # 5件以上ある場合は、ランダムに5件選択
+                selected_citations = random.sample(available_citations, 5)
+            else:
+                selected_citations = available_citations
+            
             # 1問ずつ生成（generate_and_validate_quizzesはcount=1専用）
             batch_accepted, batch_rejected, batch_attempt_errors, batch_stats = await generate_and_validate_quizzes(
                 level=request.level,
                 count=1,  # 1問ずつ生成
                 topic=request.topic,
-                citations=citations,
+                citations=selected_citations,  # 選択したcitationsを使用
                 request_id=request_id,
                 attempt_index=attempts,
             )
@@ -148,6 +172,15 @@ async def generate_quizzes_with_retry(
                         new_accepted_false.append(quiz)
                     accepted_statements.append(quiz.statement)
                     consecutive_duplicates = 0  # リセット
+                    
+                    # 使用済みcitationsを記録（重複対策）
+                    for citation in quiz.citations:
+                        citation_key = (
+                            citation.source,
+                            citation.page,
+                            citation.quote[:60] if citation.quote else ""
+                        )
+                        used_citation_keys.add(citation_key)
             
             # 重複が連続で発生した場合の警告
             if consecutive_duplicates >= max_consecutive_duplicates:
