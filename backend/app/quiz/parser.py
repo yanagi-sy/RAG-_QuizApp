@@ -246,66 +246,50 @@ def _parse_single_quiz(
     if "type" not in quiz_data:
         quiz_data["type"] = "true_false"
     
-    # Citationをパース（LLMが返した場合）
-    if "citations" in quiz_data and isinstance(quiz_data["citations"], list):
-        # 空配列チェック（LLMが [] を返した場合）
-        if len(quiz_data["citations"]) == 0:
-            logger.warning(f"クイズ {index} の citations が空配列、fallback_citations を採用")
-            quiz_data["citations"] = fallback_citations[:3] if fallback_citations else []
-        else:
-            # 要素が全てdictかチェック（list[str]などの不正形式を検出）
-            all_dict = all(isinstance(item, dict) for item in quiz_data["citations"])
-            
-            if not all_dict:
-                # 要素にdict以外が混ざっている場合、LLM出力は捨ててfallbackを使用
-                # dict以外の要素を特定して詳細をログに記録
-                non_dict_items = [
-                    {"index": i, "type": type(item).__name__, "value": str(item)[:50]} 
-                    for i, item in enumerate(quiz_data["citations"]) 
-                    if not isinstance(item, dict)
-                ]
-                logger.warning(
-                    f"クイズ {index} の citations に dict 以外の要素: {non_dict_items}、"
-                    f"fallback_citations を採用"
-                )
-                quiz_data["citations"] = fallback_citations[:3] if fallback_citations else []
-            else:
-                # 全てdictの場合は従来通り処理
-                parsed_citations = []
-                for cit_data in quiz_data["citations"]:
-                    # source と quote の両方をチェック
+    # 【重要】CitationはLLM出力に依存せず、コード側で必ず付与する
+    # fallback_citations（実際には確定citation）を必ず使用し、最低1件を保証
+    if fallback_citations and len(fallback_citations) > 0:
+        # 確定citationを必ず使用（LLMが返したcitationsは無視）
+        # 同一sourceのcitationを最大2件まで追加（複数根拠が必要な場合）
+        final_citations = []
+        
+        # まず確定citation（fallback_citations[0]）を追加
+        primary_citation = fallback_citations[0]
+        final_citations.append(primary_citation)
+        
+        # LLMが返したcitationsがある場合、同一sourceのもののみを最大1件追加
+        if "citations" in quiz_data and isinstance(quiz_data["citations"], list) and len(quiz_data["citations"]) > 0:
+            llm_citations = quiz_data["citations"]
+            # 要素が全てdictかチェック
+            if all(isinstance(item, dict) for item in llm_citations):
+                for cit_data in llm_citations:
                     source = cit_data.get("source", "").strip()
                     quote = cit_data.get("quote", "").strip()
                     
-                    # source または quote が空の場合は fallback_citations を使う
-                    if (not source or not quote) and fallback_citations:
-                        logger.warning(
-                            f"クイズ {index} の citation に空フィールド（source={bool(source)}, quote={bool(quote)}）、"
-                            f"fallback を使用"
+                    # 同一sourceで、quoteが有効な場合のみ追加
+                    if source == primary_citation.source and quote and len(final_citations) < 2:
+                        final_citations.append(
+                            Citation(
+                                source=source,
+                                page=cit_data.get("page"),
+                                quote=quote,
+                            )
                         )
-                        # fallback_citations から該当するものを探す（source が一致するもの）
-                        if source:
-                            fallback = next((c for c in fallback_citations if c.source == source), fallback_citations[0])
-                        else:
-                            fallback = fallback_citations[0]
-                        
-                        source = fallback.source
-                        quote = fallback.quote
-                    
-                    parsed_citations.append(
-                        Citation(
-                            source=source,
-                            page=cit_data.get("page"),
-                            quote=quote,
+                        logger.info(
+                            f"クイズ {index}: LLM出力から同一sourceのcitationを追加 "
+                            f"(source={source}, final_count={len(final_citations)})"
                         )
-                    )
-                
-                # parsed_citations が空の場合もfallbackを使用（安全策）
-                quiz_data["citations"] = parsed_citations if parsed_citations else fallback_citations[:1]
+                        break  # 最大1件まで
+        
+        quiz_data["citations"] = final_citations
+        logger.info(
+            f"クイズ {index}: 確定citationを付与 "
+            f"(source={primary_citation.source}, page={primary_citation.page}, final_count={len(final_citations)})"
+        )
     else:
-        # citationsがない場合はfallbackを使用
-        logger.warning(f"クイズ {index} に citations がないため、fallback_citations を採用")
-        quiz_data["citations"] = fallback_citations[:1] if fallback_citations else []
+        # fallback_citationsがない場合は警告（通常は発生しない）
+        logger.error(f"クイズ {index}: fallback_citationsが空です。citationsを空配列に設定します。")
+        quiz_data["citations"] = []
     
     # QuizItemSchemaにパース
     quiz_item = QuizItemSchema(**quiz_data)

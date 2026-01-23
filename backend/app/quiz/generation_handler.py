@@ -238,12 +238,19 @@ async def generate_quizzes_with_retry(
                 break
             
             # 【新戦略】各citationから正誤ペアを生成
-            batch_pairs = []  # (true_quiz, false_quiz) のペアリスト
+            batch_pairs = []  # (true_quiz, false_quiz, single_citation) のタプルリスト
             batch_rejected = []
             batch_attempt_errors = []
             batch_stats = {}
             
             for citation_idx, single_citation in enumerate(selected_citations_list):
+                # debugログ: selected_citationを出力
+                logger.info(
+                    f"[GENERATION:SELECTED_CITATION] citation_idx={citation_idx}, "
+                    f"source={single_citation.source}, page={single_citation.page}, "
+                    f"quote_preview={single_citation.quote[:50] if single_citation.quote else 'N/A'}"
+                )
+                
                 # 1つのcitationから正誤ペアを生成
                 pair_accepted, pair_rejected, pair_attempt_errors, pair_stats = await generate_and_validate_quizzes(
                     level=request.level,
@@ -277,9 +284,9 @@ async def generate_quizzes_with_retry(
                 pair_true = [q for q in pair_accepted if q.answer_bool]
                 pair_false = [q for q in pair_accepted if not q.answer_bool]
                 
-                # ペアが揃っている場合のみ採用
+                # ペアが揃っている場合のみ採用（single_citationも一緒に保持）
                 if len(pair_true) > 0 and len(pair_false) > 0:
-                    batch_pairs.append((pair_true[0], pair_false[0]))
+                    batch_pairs.append((pair_true[0], pair_false[0], single_citation))
                     logger.info(
                         f"[GENERATION_RETRY] citation {citation_idx+1}/5: ペア生成成功 "
                         f"(○: '{pair_true[0].statement[:40]}...', ×: '{pair_false[0].statement[:40]}...')"
@@ -292,7 +299,10 @@ async def generate_quizzes_with_retry(
             
             # 各ペアから確率的に片方を選択
             new_accepted_quizzes = []
-            for true_quiz, false_quiz in batch_pairs:
+            for pair_idx, (true_quiz, false_quiz, single_citation) in enumerate(batch_pairs):
+                # single_citationはタプルから直接取得（対応関係が保証される）
+                corresponding_citation = single_citation
+                
                 # 確率的に○または×を選択
                 selected_quiz = random.choices(
                     [true_quiz, false_quiz],
@@ -308,9 +318,50 @@ async def generate_quizzes_with_retry(
                     })
                     continue
                 
+                # 【重要】citationsを必ず付与（LLM出力に依存しない）
+                # selected_quizのcitationsが空または不十分な場合、single_citationを必ず付与
+                if not selected_quiz.citations or len(selected_quiz.citations) == 0:
+                    if corresponding_citation:
+                        # Pydanticモデルを更新（model_copyを使用）
+                        selected_quiz = selected_quiz.model_copy(update={"citations": [corresponding_citation]})
+                        logger.info(
+                            f"[GENERATION:CITATION_ASSIGNED] quizにcitationsがなかったため、selected_citationを付与: "
+                            f"source={corresponding_citation.source}, page={corresponding_citation.page}"
+                        )
+                    else:
+                        logger.warning(f"[GENERATION:CITATION_MISSING] 対応するcitationが見つかりません（pair_idx={pair_idx}）")
+                
+                # citationsが既にある場合でも、selected_citationが含まれているか確認
+                # 含まれていない場合は、selected_citationを先頭に追加（確実に紐付け）
+                if corresponding_citation:
+                    citation_sources = [c.source for c in selected_quiz.citations]
+                    if corresponding_citation.source not in citation_sources:
+                        # selected_citationを先頭に追加
+                        updated_citations = [corresponding_citation] + selected_quiz.citations
+                        selected_quiz = selected_quiz.model_copy(update={"citations": updated_citations})
+                        logger.info(
+                            f"[GENERATION:CITATION_PREPENDED] selected_citationを先頭に追加: "
+                            f"source={corresponding_citation.source}, page={corresponding_citation.page}, "
+                            f"final_citations_count={len(updated_citations)}"
+                        )
+                    else:
+                        logger.info(
+                            f"[GENERATION:CITATION_VERIFIED] selected_citationが既に含まれています: "
+                            f"source={corresponding_citation.source}, final_citations_count={len(selected_quiz.citations)}"
+                        )
+                
                 # 採用
                 new_accepted_quizzes.append(selected_quiz)
                 accepted_statements.append(selected_quiz.statement)
+                
+                # debugログ: selected_citationとfinal_citations_countを出力
+                final_citations_count = len(selected_quiz.citations)
+                selected_citation_info = f"{corresponding_citation.source}(p.{corresponding_citation.page})" if corresponding_citation else "NONE"
+                logger.info(
+                    f"[GENERATION:DEBUG] selected_citation={selected_citation_info}, "
+                    f"final_citations_count={final_citations_count}, "
+                    f"quiz_statement_preview={selected_quiz.statement[:50]}"
+                )
                 
                 # 使用済みcitationsを記録（このcitationは使用済みとしてマーク）
                 # ペアの両方のcitationsを記録（○と×は同じcitationを使用）
