@@ -91,6 +91,11 @@ def build_quiz_generation_messages(
     # systemプロンプト：理解度を深めるクイズ生成版
     system_content = """業務マニュアルから理解度を深めるクイズを作成します。
 
+【重要】言語ルール:
+- すべての出力は日本語で行うこと
+- statement、explanation、すべてのテキストは必ず日本語で出力すること
+- 英語での出力は一切禁止
+
 出力ルール:
 - JSONのみ出力（説明文・コードフェンス・コメント禁止）
 - { "quizzes": [...] } の形式のみ
@@ -244,6 +249,11 @@ T13: 「【判断基準1・状況】かつ【判断基準2・状況】に該当�
     # userプロンプト（理解度を深める版）
     user_content = f"""JSONのみ出力。説明文禁止。
 
+【重要】言語ルール:
+- すべての出力は日本語で行うこと
+- statement、explanation、すべてのテキストは必ず日本語で出力すること
+- 英語での出力は一切禁止
+
 条件:
 {topic_text}難易度: {level}
 問題数: {count}個（短い出力で確実に返す）
@@ -325,6 +335,11 @@ def build_quiz_json_fix_messages(
     # systemプロンプト：JSON修復専用（簡潔版、文脈を含める指示も追加）
     system_content = f"""前回の出力はJSONエラーでした。修正して再出力してください。
 
+【重要】言語ルール:
+- すべての出力は日本語で行うこと
+- statement、explanation、すべてのテキストは必ず日本語で出力すること
+- 英語での出力は一切禁止
+
 必須:
 - JSONのみ（説明文・コードフェンス禁止）
 - quizzes配列に{count}個含める
@@ -390,6 +405,11 @@ def build_quiz_json_fix_messages(
     explanation_guide_fix = explanation_guidance_fix.get(level, "基本的な理由や重要性を簡潔に説明（最大100文字）")
     
     user_content = f"""JSONのみ出力。
+
+【重要】言語ルール:
+- すべての出力は日本語で行うこと
+- statement、explanation、すべてのテキストは必ず日本語で出力すること
+- 英語での出力は一切禁止
 
 {topic_text}難易度: {level}
 問題数: {count}個
