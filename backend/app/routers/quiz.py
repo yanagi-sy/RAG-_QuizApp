@@ -107,9 +107,9 @@ async def generate_quizzes_endpoint(request: QuizGenerateRequest) -> QuizGenerat
             debug=final_debug,
         )
     
-    # MVP: 生成数を常に3問に固定（タイムアウト対策）
-    target_count = min(request.count, 3)
-    logger.info(f"Quiz生成目標: target={target_count}（MVP固定、req.count={request.count}）, citations={len(citations)}件")
+    # CHANGED: クイズセット機能では5問が必要なため、最大5問に変更
+    target_count = min(request.count, 5)
+    logger.info(f"Quiz生成目標: target={target_count}（最大5問、req.count={request.count}）, citations={len(citations)}件")
     
     # LLMでクイズを生成（バリデーション付き）
     t_llm_start = time.perf_counter()
