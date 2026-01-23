@@ -142,6 +142,11 @@ async def generate_quizzes_with_retry(
     """
     クイズ生成を再試行する（複数回試行）
     
+    【新戦略】出題箇所（citation）ごとに正誤ペアを生成し、確率的に片方を採用
+    - 1つのcitationから正誤ペア（○と×）を必ず生成
+    - 各ペアから確率的に片方（○または×）を選択（デフォルト50%ずつ）
+    - これにより出題箇所の重複を完全に防ぐ
+    
     Args:
         request: クイズ生成リクエスト
         target_count: 目標生成数
@@ -157,12 +162,18 @@ async def generate_quizzes_with_retry(
         - attempt_errors: 試行ごとの失敗履歴
         - aggregated_stats: 集計統計情報
     """
-    # CHANGED: 目標数に基づいて最大試行回数を動的に計算
-    # 各試行で○×2件を生成するため、目標数÷2 + 余裕を持たせる
+    import random
+    
+    # CHANGED: 新戦略では、citationごとにペアを生成するため、試行回数の計算を変更
+    # 1回の試行で5つのcitationから5ペア（計10問）を生成し、その中から目標数分を選択
+    # 目標数に達するまで、複数回試行する
     base_max_attempts = settings.quiz_max_attempts
-    # 目標数に応じて調整（最低でも目標数÷2 + 2回の余裕）
-    calculated_max_attempts = max(base_max_attempts, (target_count // 2) + 2)
+    # 目標数÷5（1回の試行で5ペア生成） + 余裕を持たせる
+    calculated_max_attempts = max(base_max_attempts, (target_count // 5) + 2)
     max_attempts = calculated_max_attempts
+    
+    # 確率的選択の設定（○と×の選択確率、デフォルトは50%ずつ）
+    true_probability = 0.5  # ○を選択する確率（50%）
     
     accepted_quizzes = []
     all_rejected_items = []
@@ -174,10 +185,9 @@ async def generate_quizzes_with_retry(
     
     # 目標数に達するまで、または最大試行回数に達するまで繰り返す
     attempts = 0
-    consecutive_duplicates = 0  # 連続重複回数（無限ループ防止）
-    max_consecutive_duplicates = 10  # 最大連続重複回数
     
     # 重複対策: 使用済みcitationsを記録（同じcitationから同じクイズが生成されるのを防ぐ）
+    # 【新戦略】1つのcitationから1ペアのみ生成するため、citationの重複は発生しない
     used_citation_keys = set()
     
     # banned_statements: 既出・重複で落としたstatementを保持（retry時にLLMに渡す）
@@ -186,7 +196,8 @@ async def generate_quizzes_with_retry(
     
     logger.info(
         f"[GENERATION_RETRY] 開始: target={target_count}, max_attempts={max_attempts} "
-        f"(base={base_max_attempts}, calculated={calculated_max_attempts})"
+        f"(base={base_max_attempts}, calculated={calculated_max_attempts}), "
+        f"strategy=ペア生成方式（citationごとに正誤ペア生成→確率的選択）"
     )
     
     while len(accepted_quizzes) < target_count and attempts < max_attempts:
@@ -201,169 +212,108 @@ async def generate_quizzes_with_retry(
         )
         
         try:
-            # 重複対策: 使用済みcitationsを除外したcitationsを生成に使用
-            # 各試行で異なるcitationsを使うことで、多様なクイズを生成
+            # 使用済みcitationsを除外したcitationsを取得
             available_citations = [
                 c for c in citations
                 if (c.source, c.page, c.quote[:60] if c.quote else "") not in used_citation_keys
             ]
             
-            # 使用可能なcitationsが少ない場合、または連続重複が多すぎる場合は、使用済みをリセット
-            # 重複が多すぎて規定数に達しない問題を解決するため、より積極的にリセット
-            should_reset = (
-                len(available_citations) < 3 or  # 3件未満の場合（より積極的にリセット）
-                consecutive_duplicates >= 3 or  # 連続3回重複した場合（より積極的にリセット）
-                (attempts > 2 and len(accepted_quizzes) == 0) or  # 2回以上試行しても1件も採用されていない場合
-                (attempts > 5 and len(accepted_quizzes) < target_count // 2)  # 5回以上試行しても目標数の半分に達していない場合
-            )
-            
-            if should_reset:
+            # 使用可能なcitationsが少ない場合は、使用済みをリセット
+            if len(available_citations) < 5:
                 logger.info(
                     f"[GENERATION_RETRY] 使用済みリストをリセット "
-                    f"(available={len(available_citations)}, consecutive_duplicates={consecutive_duplicates}, "
-                    f"accepted={len(accepted_quizzes)})"
+                    f"(available={len(available_citations)}, accepted={len(accepted_quizzes)})"
                 )
                 used_citation_keys.clear()
                 available_citations = citations
-                consecutive_duplicates = 0  # リセット時に連続重複もリセット
             
-            # 使用可能なcitationsからランダムに選択（多様性を確保）
-            import random
-            if len(available_citations) > 5:
-                # 5件以上ある場合は、ランダムに5件選択
-                selected_citations = random.sample(available_citations, 5)
+            # 使用可能なcitationsから5件を選択（1回の試行で5ペア生成）
+            if len(available_citations) >= 5:
+                selected_citations_list = random.sample(available_citations, 5)
             else:
-                selected_citations = available_citations
+                selected_citations_list = available_citations[:5] if len(available_citations) > 0 else []
             
-            # 1問ずつ生成（generate_and_validate_quizzesはcount=1専用）
-            # banned_statementsを渡して、既出・重複で落としたstatementを避ける
-            batch_accepted, batch_rejected, batch_attempt_errors, batch_stats = await generate_and_validate_quizzes(
-                level=request.level,
-                count=1,  # 1問ずつ生成
-                topic=request.topic,
-                citations=selected_citations,  # 選択したcitationsを使用
-                request_id=request_id,
-                attempt_index=attempts,
-                banned_statements=banned_statements if len(banned_statements) > 0 else None,
-            )
+            if len(selected_citations_list) == 0:
+                logger.warning("[GENERATION_RETRY] 使用可能なcitationsがありません")
+                break
             
-            # 重複チェック: 新しく生成されたクイズが既存のものと重複していないか確認
-            # CHANGED: ○と×を別々に管理し、最終的にバランス良く配置する
-            # また、○と×のペアが同じcitationから生成される場合、そのcitationを1回だけカウントする
-            new_accepted_true = []
-            new_accepted_false = []
+            # 【新戦略】各citationから正誤ペアを生成
+            batch_pairs = []  # (true_quiz, false_quiz) のペアリスト
+            batch_rejected = []
+            batch_attempt_errors = []
+            batch_stats = {}
             
-            # ○と×のペアを一緒に処理するため、まず○と×を分ける
-            batch_true = [q for q in batch_accepted if q.answer_bool]
-            batch_false = [q for q in batch_accepted if not q.answer_bool]
-            
-            # ○と×のペアを一緒に処理（同じcitationから生成されたペアは1つのcitationとして扱う）
-            # まず、○と×のペアをマッチング（同じcitationから生成された可能性が高い）
-            processed_true_quizzes = []
-            processed_false_quizzes = []
-            
-            # ○を処理
-            for true_quiz in batch_true:
-                # 重複チェック1: statementの重複
-                if _is_duplicate(true_quiz.statement, accepted_statements):
-                    logger.warning(f"重複クイズを除外: '{true_quiz.statement[:50]}...'")
-                    all_rejected_items.append({
-                        "statement": true_quiz.statement[:100],
-                        "reason": "duplicate_statement",
-                    })
-                    # banned_statementsに追加（上限チェック）
-                    if len(banned_statements) < banned_statements_max:
-                        banned_statements.append(true_quiz.statement)
-                    consecutive_duplicates += 1
-                    continue
+            for citation_idx, single_citation in enumerate(selected_citations_list):
+                # 1つのcitationから正誤ペアを生成
+                pair_accepted, pair_rejected, pair_attempt_errors, pair_stats = await generate_and_validate_quizzes(
+                    level=request.level,
+                    count=1,  # 1問ずつ生成（○と×のペアが返される）
+                    topic=request.topic,
+                    citations=[single_citation],  # 1つのcitationのみを使用
+                    request_id=request_id,
+                    attempt_index=f"{attempts}-{citation_idx}",
+                    banned_statements=banned_statements if len(banned_statements) > 0 else None,
+                )
                 
-                # 重複チェック2: citationの重複（出題箇所の重複）
-                if _is_citation_duplicate(true_quiz.citations, used_citation_keys):
-                    # TypeError対策: pageを文字列に変換
-                    citation_strs = [
-                        f"{c.source}(p.{c.page})" if c.page is not None else f"{c.source}(p.None)"
-                        for c in true_quiz.citations[:2]
-                    ]
+                # 統計情報をマージ
+                for key, value in pair_stats.items():
+                    if key in batch_stats:
+                        if isinstance(value, (int, float)):
+                            batch_stats[key] += value
+                        elif isinstance(value, dict):
+                            for k, v in value.items():
+                                prev = batch_stats[key].get(k)
+                                if isinstance(v, (int, float)) and isinstance(prev, (int, float)):
+                                    batch_stats[key][k] = prev + v
+                                else:
+                                    batch_stats[key][k] = v
+                    else:
+                        batch_stats[key] = value
+                
+                batch_rejected.extend(pair_rejected)
+                batch_attempt_errors.extend(pair_attempt_errors)
+                
+                # ○と×を分ける
+                pair_true = [q for q in pair_accepted if q.answer_bool]
+                pair_false = [q for q in pair_accepted if not q.answer_bool]
+                
+                # ペアが揃っている場合のみ採用
+                if len(pair_true) > 0 and len(pair_false) > 0:
+                    batch_pairs.append((pair_true[0], pair_false[0]))
+                    logger.info(
+                        f"[GENERATION_RETRY] citation {citation_idx+1}/5: ペア生成成功 "
+                        f"(○: '{pair_true[0].statement[:40]}...', ×: '{pair_false[0].statement[:40]}...')"
+                    )
+                else:
                     logger.warning(
-                        f"出題箇所重複クイズを除外: '{true_quiz.statement[:50]}...' "
-                        f"(citations: {citation_strs})"
+                        f"[GENERATION_RETRY] citation {citation_idx+1}/5: ペア生成失敗 "
+                        f"(○={len(pair_true)}, ×={len(pair_false)})"
                     )
-                    all_rejected_items.append({
-                        "statement": true_quiz.statement[:100],
-                        "reason": "duplicate_citation",
-                    })
-                    # banned_statementsに追加（上限チェック）
-                    if len(banned_statements) < banned_statements_max:
-                        banned_statements.append(true_quiz.statement)
-                    consecutive_duplicates += 1
-                    continue
-                
-                # ○を採用候補に追加
-                processed_true_quizzes.append(true_quiz)
             
-            # ×を処理（○から生成された×は、対応する○と同じcitationを使用している可能性が高い）
-            # 対応する○が採用された場合、×も同じcitationを使用していても採用する
-            for false_quiz in batch_false:
-                # 重複チェック1: statementの重複
-                if _is_duplicate(false_quiz.statement, accepted_statements):
-                    logger.warning(f"重複クイズを除外: '{false_quiz.statement[:50]}...'")
+            # 各ペアから確率的に片方を選択
+            new_accepted_quizzes = []
+            for true_quiz, false_quiz in batch_pairs:
+                # 確率的に○または×を選択
+                selected_quiz = random.choices(
+                    [true_quiz, false_quiz],
+                    weights=[true_probability, 1 - true_probability]
+                )[0]
+                
+                # statementの重複チェック（念のため）
+                if _is_duplicate(selected_quiz.statement, accepted_statements):
+                    logger.warning(f"重複クイズを除外: '{selected_quiz.statement[:50]}...'")
                     all_rejected_items.append({
-                        "statement": false_quiz.statement[:100],
+                        "statement": selected_quiz.statement[:100],
                         "reason": "duplicate_statement",
                     })
-                    # banned_statementsに追加（上限チェック）
-                    if len(banned_statements) < banned_statements_max:
-                        banned_statements.append(false_quiz.statement)
-                    consecutive_duplicates += 1
                     continue
                 
-                # 重複チェック2: citationの重複（出題箇所の重複）
-                # 注意: ×は○から生成されるため、同じcitationを使用している可能性が高い
-                # しかし、対応する○が採用された場合、×も採用する（○と×のペアは1つのcitationとして扱う）
-                # ただし、他の○問題と同じcitationを使用している場合は除外する
-                if _is_citation_duplicate(false_quiz.citations, used_citation_keys):
-                    # 対応する○が採用候補にあるかチェック（同じcitationを使用している可能性）
-                    has_corresponding_true = any(
-                        any(
-                            (c1.source, c1.page, c1.quote[:60] if c1.quote else "") ==
-                            (c2.source, c2.page, c2.quote[:60] if c2.quote else "")
-                            for c1 in false_quiz.citations
-                            for c2 in true_quiz.citations
-                        )
-                        for true_quiz in processed_true_quizzes
-                    )
-                    
-                    if not has_corresponding_true:
-                        # 対応する○がない場合、出題箇所の重複として除外
-                        citation_strs = [
-                            f"{c.source}(p.{c.page})" if c.page is not None else f"{c.source}(p.None)"
-                            for c in false_quiz.citations[:2]
-                        ]
-                        logger.warning(
-                            f"出題箇所重複クイズを除外: '{false_quiz.statement[:50]}...' "
-                            f"(citations: {citation_strs})"
-                        )
-                    all_rejected_items.append({
-                        "statement": false_quiz.statement[:100],
-                        "reason": "duplicate_citation",
-                    })
-                    # banned_statementsに追加（上限チェック）
-                    if len(banned_statements) < banned_statements_max:
-                        banned_statements.append(false_quiz.statement)
-                    consecutive_duplicates += 1
-                    continue
-                    # 対応する○がある場合、×も採用する（○と×のペアは1つのcitationとして扱う）
+                # 採用
+                new_accepted_quizzes.append(selected_quiz)
+                accepted_statements.append(selected_quiz.statement)
                 
-                # ×を採用候補に追加
-                processed_false_quizzes.append(false_quiz)
-            
-            # 採用候補を実際に採用
-            for true_quiz in processed_true_quizzes:
-                new_accepted_true.append(true_quiz)
-                accepted_statements.append(true_quiz.statement)
-                consecutive_duplicates = 0  # リセット
-                
-                # 使用済みcitationsを記録（○のcitationsを記録）
+                # 使用済みcitationsを記録（このcitationは使用済みとしてマーク）
+                # ペアの両方のcitationsを記録（○と×は同じcitationを使用）
                 for citation in true_quiz.citations:
                     citation_key = (
                         citation.source,
@@ -372,41 +322,14 @@ async def generate_quizzes_with_retry(
                     )
                     used_citation_keys.add(citation_key)
             
-            for false_quiz in processed_false_quizzes:
-                new_accepted_false.append(false_quiz)
-                accepted_statements.append(false_quiz.statement)
-                consecutive_duplicates = 0  # リセット
-                
-                # 使用済みcitationsを記録（×のcitationsも記録）
-                # 注意: ×は○から生成されるため、同じcitationを使用している可能性が高い
-                # その場合、既に使用済みになっているが、念のため記録する
-                for citation in false_quiz.citations:
-                    citation_key = (
-                        citation.source,
-                        citation.page,
-                        citation.quote[:60] if citation.quote else ""
-                    )
-                    used_citation_keys.add(citation_key)
-            
-            # 重複が連続で発生した場合の警告
-            if consecutive_duplicates >= max_consecutive_duplicates:
-                logger.warning(
-                    f"連続{consecutive_duplicates}回重複が発生しました。"
-                    f"無限ループを防ぐため、この試行をスキップします。"
-                )
-                consecutive_duplicates = 0  # リセット
-                continue  # この試行をスキップ
-            
-            # 結果を集計（重複除外後のクイズのみ）
-            # CHANGED: ○と×を別々に追加（後でバランス良く配置するため）
-            accepted_quizzes.extend(new_accepted_true)
-            accepted_quizzes.extend(new_accepted_false)
+            # 結果を集計
+            accepted_quizzes.extend(new_accepted_quizzes)
             all_rejected_items.extend(batch_rejected)
             all_attempt_errors.extend(batch_attempt_errors)
             
             logger.info(
                 f"[GENERATION_RETRY] attempt={attempts} 完了: "
-                f"accepted_true={len(new_accepted_true)}, accepted_false={len(new_accepted_false)}, "
+                f"pairs_generated={len(batch_pairs)}, selected={len(new_accepted_quizzes)}, "
                 f"rejected={len(batch_rejected)}, total_accepted={len(accepted_quizzes)}"
             )
             
@@ -416,8 +339,6 @@ async def generate_quizzes_with_retry(
                     if isinstance(value, (int, float)):
                         aggregated_stats[key] += value
                     elif isinstance(value, dict):
-                        # dictの場合はマージ（数値のみ加算、それ以外は上書き）
-                        # sample_mutation_log 等は str を含むため str+int の TypeError を防ぐ
                         for k, v in value.items():
                             prev = aggregated_stats[key].get(k)
                             if isinstance(v, (int, float)) and isinstance(prev, (int, float)):
@@ -427,8 +348,6 @@ async def generate_quizzes_with_retry(
                 else:
                     aggregated_stats[key] = value
             
-            # ログは既に上で出力されているため、ここでは簡潔に
-            pass
             
         except Exception as e:
             logger.error(f"[GENERATION_RETRY] attempt={attempts} でエラー: {type(e).__name__}: {e}")
@@ -445,27 +364,11 @@ async def generate_quizzes_with_retry(
             if attempts >= max_attempts:
                 break
     
-    # CHANGED: ○と×をバランス良く配置（交互に配置）
-    # まず、○と×を分ける
-    accepted_true = [q for q in accepted_quizzes if q.answer_bool]
-    accepted_false = [q for q in accepted_quizzes if not q.answer_bool]
-    
-    # ○と×を交互に配置（バランス良く）
-    balanced_quizzes = []
-    max_len = max(len(accepted_true), len(accepted_false))
-    for i in range(max_len):
-        if i < len(accepted_true):
-            balanced_quizzes.append(accepted_true[i])
-        if i < len(accepted_false):
-            balanced_quizzes.append(accepted_false[i])
-    
-    # 目標数に達するまで、または最大試行回数に達するまで繰り返す
-    # ただし、目標数に達した場合はスライス
-    if len(balanced_quizzes) > target_count:
-        logger.info(f"生成数が目標数（{target_count}問）を超えています（{len(balanced_quizzes)}問）。目標数にスライスします。")
-        balanced_quizzes = balanced_quizzes[:target_count]
-    
-    accepted_quizzes = balanced_quizzes
+    # 【新戦略】確率的選択により既にバランスが取れているため、そのまま使用
+    # ただし、目標数を超えている場合はスライス
+    if len(accepted_quizzes) > target_count:
+        logger.info(f"生成数が目標数（{target_count}問）を超えています（{len(accepted_quizzes)}問）。目標数にスライスします。")
+        accepted_quizzes = accepted_quizzes[:target_count]
     
     # 目標数に達したかどうか
     exhausted = len(accepted_quizzes) < target_count
