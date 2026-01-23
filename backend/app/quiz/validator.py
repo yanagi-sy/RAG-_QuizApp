@@ -1,6 +1,7 @@
 """
 クイズのバリデーション
 """
+import re
 
 # 曖昧表現リスト（○×として判定不能な表現）
 AMBIGUOUS_PHRASES = [
@@ -26,6 +27,16 @@ AMBIGUOUS_PHRASES = [
     "考えられる",
     "思われる",
     "みられる",
+]
+
+# 不自然表現パターン（全ソース共通の簡易ルール）
+# 過検知を避けるため、軽めのチェックのみ
+UNNATURAL_PATTERNS = [
+    # 客体ズレ: 「を優先して」は目的語が不自然（「へ優先的に」「を優先的に」が自然）
+    (r"を優先して", "expression_unnatural_object"),
+    # 指示語のみ: 「この/その/それ」だけでは内容が決まらない（文脈依存）
+    # ただし、過検知を避けるため、単独で使われている場合のみ
+    (r"^(この|その|それ)\s*[はがを]|^[はがを]\s*(この|その|それ)", "expression_ambiguous_reference"),
 ]
 
 
@@ -74,6 +85,12 @@ def validate_quiz_item(item: dict) -> tuple[bool, str]:
     for phrase in AMBIGUOUS_PHRASES:
         if phrase in statement:
             return (False, f"ambiguous_phrase:{phrase}")
+    
+    # 表現品質チェック（全ソース共通の簡易ルール）
+    # 過検知を避けるため、軽めのチェックのみ
+    for pattern, reason in UNNATURAL_PATTERNS:
+        if re.search(pattern, statement):
+            return (False, reason)
     
     # answer_bool チェック（必須、bool型）
     answer_bool = item.get("answer_bool")

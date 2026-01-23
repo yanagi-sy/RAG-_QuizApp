@@ -60,6 +60,7 @@ async def generate_and_validate_quizzes(
     citations: list[Citation],
     request_id: str | None = None,
     attempt_index: int | None = None,
+    banned_statements: list[str] | None = None,
 ) -> tuple[list[QuizItemSchema], list[dict], list[dict], dict]:
     """
     LLMでクイズを生成し、バリデーションを行う（○のみ生成 → ×はmutatorで生成）
@@ -101,6 +102,7 @@ async def generate_and_validate_quizzes(
         count=count,
         topic=topic,
         citations=citations,
+        banned_statements=banned_statements,
     )
     
     # 互換対応: (messages, prompt_stats) または messages のみ
@@ -126,6 +128,7 @@ async def generate_and_validate_quizzes(
             citations=citations,
             request_id=request_id,
             attempt_index=attempt_index,
+            banned_statements=banned_statements,
         )
         
         # LLM呼び出しで更新されたprompt_stats（llm_output_charsなど）をマージ
@@ -209,9 +212,12 @@ async def generate_and_validate_quizzes(
                 logger.info(f"LLM由来のfalse_statementがないため、Mutatorで生成")
                 
                 # [観測ログA] Mutator直前のstatement確認
+                # TypeError対策: request_idとattempt_indexを文字列に変換
+                request_id_str = str(request_id) if request_id is not None else "None"
+                attempt_index_str = str(attempt_index) if attempt_index is not None else "None"
                 logger.info(
                     f"[PIPE:BEFORE_MUTATOR] "
-                    f"request_id={request_id}, attempt_index={attempt_index}, "
+                    f"request_id={request_id_str}, attempt_index={attempt_index_str}, "
                     f"statement_preview={original_statement[:120]}, "
                     f"statement_len={len(original_statement)}"
                 )
@@ -381,6 +387,7 @@ async def generate_quizzes_with_llm(
     citations: list[Citation],
     request_id: str | None = None,
     attempt_index: int | None = None,
+    banned_statements: list[str] | None = None,
 ) -> tuple[list[QuizItemSchema], list[dict], dict]:
     """
     LLMでクイズを生成（3層ガード: Prompt強化 + Robust parse + JSON修復リトライ）
@@ -429,6 +436,7 @@ async def generate_quizzes_with_llm(
         count=count,
         topic=topic,
         citations=citations,
+        banned_statements=banned_statements,
     )
     
     # 互換対応: (messages, prompt_stats) または messages のみ
