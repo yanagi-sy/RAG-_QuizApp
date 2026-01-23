@@ -233,14 +233,36 @@ async def generate_quizzes_with_retry(
                 if (c.source, c.page, c.quote[:60] if c.quote else "") not in used_citation_keys
             ]
             
-            # 使用可能なcitationsが少ない場合は、使用済みをリセット
-            if len(available_citations) < 5:
-                logger.info(
-                    f"[GENERATION_RETRY] 使用済みリストをリセット "
-                    f"(available={len(available_citations)}, accepted={len(accepted_quizzes)})"
+            # 【品質担保】使用可能なcitationsが少ない場合の処理
+            # リセットロジックを改善：目標数に達していない場合のみリセット
+            # ただし、リセットしても目標数に達しない可能性があるため、早期終了を検討
+            remaining = target_count - len(accepted_quizzes)
+            
+            if len(available_citations) < remaining and len(accepted_quizzes) < target_count:
+                logger.warning(
+                    f"[GENERATION_RETRY] 使用可能なcitationsが不足 "
+                    f"(available={len(available_citations)}, remaining={remaining}, accepted={len(accepted_quizzes)})"
                 )
-                used_citation_keys.clear()
-                available_citations = citations
+                
+                # リセットしても意味がない場合は早期終了
+                if len(citations) < remaining:
+                    logger.error(
+                        f"[GENERATION_RETRY] 全citations数({len(citations)})が残り必要数({remaining})を下回るため、早期終了します"
+                    )
+                    break
+                
+                # リセットして再試行（ただし、リセット回数を制限）
+                if attempts < max_attempts - 1:  # 最後の試行ではリセットしない
+                    logger.info(
+                        f"[GENERATION_RETRY] 使用済みリストをリセット "
+                        f"(available={len(available_citations)}, accepted={len(accepted_quizzes)}, remaining={remaining})"
+                    )
+                    used_citation_keys.clear()
+                    available_citations = citations
+                else:
+                    logger.warning(
+                        f"[GENERATION_RETRY] 最後の試行のため、リセットせずに続行します"
+                    )
             
             # 残り必要数を計算（1回の試行で最大5問生成を想定）
             remaining = target_count - len(accepted_quizzes)
@@ -315,6 +337,23 @@ async def generate_quizzes_with_retry(
                         # citationを確実に紐付け
                         selected_quiz = quiz_true[0]
                         corresponding_citation = single_citation
+                        
+                        # 【品質担保】citationのsourceが指定ソースと一致することを確認
+                        # （念のため二重チェック、retrievalでフィルタ済みだが念のため）
+                        if corresponding_citation and corresponding_citation.source:
+                            # request.source_idsが1件であることはrouterで保証済み
+                            expected_source = request.source_ids[0] if request.source_ids and len(request.source_ids) > 0 else None
+                            if expected_source and corresponding_citation.source != expected_source:
+                                logger.error(
+                                    f"[GENERATION:SOURCE_MISMATCH] citationのsourceが不一致: "
+                                    f"expected={expected_source}, actual={corresponding_citation.source}, "
+                                    f"quiz_statement={selected_quiz.statement[:50]}"
+                                )
+                                all_rejected_items.append({
+                                    "statement": selected_quiz.statement[:100],
+                                    "reason": "source_mismatch",
+                                })
+                                continue
                         
                         # statementの重複チェック
                         if _is_duplicate(selected_quiz.statement, accepted_statements):

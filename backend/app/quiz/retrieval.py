@@ -145,6 +145,11 @@ def retrieve_for_quiz(
         source = metadata.get("source", "unknown")
         page = metadata.get("page", 0)
         
+        # 【品質担保】指定source以外のchunkを除外（念のため二重チェック）
+        if source != target_source:
+            logger.warning(f"[QuizRetrieval] citations作成時にソース不一致を検出: source={source} (target={target_source})")
+            continue
+        
         # 重複排除（source, page, quote先頭60文字）
         quote_prefix = text[:60].strip()
         quote_key = (source, page, quote_prefix)
@@ -229,6 +234,11 @@ def retrieve_for_quiz(
             metadata = chunk["metadata"]
             source = metadata.get("source", "unknown")
             page = metadata.get("page", 0)
+            
+            # 【品質担保】指定source以外のchunkを除外（念のため二重チェック）
+            if source != target_source:
+                logger.warning(f"[QuizRetrieval] 再取得時のcitations作成でソース不一致を検出: source={source} (target={target_source})")
+                continue
             
             quote_prefix = text[:60].strip()
             quote_key = (source, page, quote_prefix)
