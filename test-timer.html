@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>カウントダウンタイマー</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-dark: #4f46e5;
+            --primary-light: #818cf8;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --danger-dark: #dc2626;
+            --neutral: #6b7280;
+            --neutral-light: #9ca3af;
+            --bg-gradient-start: #667eea;
+            --bg-gradient-end: #764ba2;
+            --glass-bg: rgba(255, 255, 255, 0.1);
+            --glass-border: rgba(255, 255, 255, 0.2);
+            --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.1);
+            --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.15);
+            --shadow-lg: 0 20px 60px rgba(0, 0, 0, 0.3);
+            --shadow-xl: 0 25px 80px rgba(0, 0, 0, 0.4);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, var(--bg-gradient-start) 0%, var(--bg-gradient-end) 100%);
+            background-attachment: fixed;
+            padding: 20px;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* アニメーション背景エフェクト */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+            background-size: 50px 50px;
+            animation: backgroundMove 20s linear infinite;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        @keyframes backgroundMove {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(50px, 50px); }
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-radius: 32px;
+            padding: 48px;
+            box-shadow: var(--shadow-xl);
+            text-align: center;
+            max-width: 560px;
+            width: 100%;
+            position: relative;
+            z-index: 1;
+            border: 1px solid var(--glass-border);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .container:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 30px 90px rgba(0, 0, 0, 0.35);
+        }
+
+        h1 {
+            color: #1f2937;
+            margin-bottom: 40px;
+            font-size: 32px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* 円形プログレスバー */
+        .progress-ring {
+            position: relative;
+            width: 280px;
+            height: 280px;
+            margin: 0 auto 40px;
+        }
+
+        .progress-ring svg {
+            transform: rotate(-90deg);
+            width: 100%;
+            height: 100%;
+        }
+
+        .progress-ring circle {
+            fill: none;
+            stroke-width: 8;
+            transition: stroke-dashoffset 0.5s ease;
+        }
+
+        .progress-ring .bg-circle {
+            stroke: #e5e7eb;
+            opacity: 0.3;
+        }
+
+        .progress-ring .progress-circle {
+            stroke: var(--primary);
+            stroke-linecap: round;
+            stroke-dasharray: 879.65;
+            stroke-dashoffset: 879.65;
+        }
+
+        .progress-ring .progress-circle.warning {
+            stroke: var(--warning);
+        }
+
+        .progress-ring .progress-circle.danger {
+            stroke: var(--danger);
+            animation: pulse-ring 1s ease-in-out infinite;
+        }
+
+        @keyframes pulse-ring {
+            0%, 100% { stroke-width: 8; }
+            50% { stroke-width: 12; }
+        }
+
+        .timer-display {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 64px;
+            font-weight: 800;
+            color: #1f2937;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: -2px;
+            transition: color 0.3s ease, transform 0.3s ease;
+        }
+
+        .timer-display.warning {
+            color: var(--warning);
+        }
+
+        .timer-display.danger {
+            color: var(--danger);
+            animation: pulse-text 1s ease-in-out infinite;
+        }
+
+        @keyframes pulse-text {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); }
+            50% { transform: translate(-50%, -50%) scale(1.05); }
+        }
+
+        .input-group {
+            display: flex;
+            gap: 24px;
+            justify-content: center;
+            margin-bottom: 40px;
+            flex-wrap: wrap;
+        }
+
+        .input-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+        }
+
+        .input-wrapper label {
+            font-size: 13px;
+            color: #6b7280;
+            margin-bottom: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .input-wrapper input {
+            width: 100px;
+            padding: 16px;
+            font-size: 28px;
+            font-weight: 700;
+            text-align: center;
+            border: 2px solid #e5e7eb;
+            border-radius: 16px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            background: #ffffff;
+            color: #1f2937;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .input-wrapper input:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+            transform: scale(1.05);
+        }
+
+        .input-wrapper input:disabled {
+            background: #f3f4f6;
+            color: #9ca3af;
+            cursor: not-allowed;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 24px;
+        }
+
+        button {
+            padding: 16px 32px;
+            font-size: 15px;
+            font-weight: 600;
+            border: none;
+            border-radius: 16px;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            min-width: 140px;
+            position: relative;
+            overflow: hidden;
+            letter-spacing: 0.3px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        button::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: translate(-50%, -50%);
+            transition: width 0.6s, height 0.6s;
+        }
+
+        button:hover:not(:disabled)::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        button:active:not(:disabled) {
+            transform: scale(0.98);
+        }
+
+        .btn-start {
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-light) 100%);
+            color: white;
+        }
+
+        .btn-start:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 24px rgba(99, 102, 241, 0.4);
+        }
+
+        .btn-stop {
+            background: linear-gradient(135deg, var(--danger) 0%, var(--danger-dark) 100%);
+            color: white;
+        }
+
+        .btn-stop:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 24px rgba(239, 68, 68, 0.4);
+        }
+
+        .btn-reset {
+            background: linear-gradient(135deg, var(--neutral) 0%, var(--neutral-light) 100%);
+            color: white;
+        }
+
+        .btn-reset:hover:not(:disabled) {
+            transform: translateY(-3px);
+            box-shadow: 0 12px 24px rgba(107, 114, 128, 0.4);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        button span {
+            position: relative;
+            z-index: 1;
+        }
+
+        .message {
+            margin-top: 24px;
+            font-size: 16px;
+            color: #6b7280;
+            min-height: 32px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .message.finished {
+            color: var(--danger);
+            font-weight: 700;
+            font-size: 18px;
+            animation: celebration 0.6s ease;
+        }
+
+        @keyframes celebration {
+            0%, 100% { transform: scale(1); }
+            25% { transform: scale(1.1) rotate(-2deg); }
+            75% { transform: scale(1.1) rotate(2deg); }
+        }
+
+        /* レスポンシブ対応 */
+        @media (max-width: 640px) {
+            .container {
+                padding: 32px 24px;
+                border-radius: 24px;
+            }
+
+            h1 {
+                font-size: 26px;
+                margin-bottom: 32px;
+            }
+
+            .progress-ring {
+                width: 240px;
+                height: 240px;
+                margin-bottom: 32px;
+            }
+
+            .timer-display {
+                font-size: 52px;
+            }
+
+            .input-wrapper input {
+                width: 85px;
+                font-size: 24px;
+                padding: 14px;
+            }
+
+            button {
+                min-width: 120px;
+                padding: 14px 24px;
+                font-size: 14px;
+            }
+
+            .button-group {
+                gap: 8px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>カウントダウンタイマー</h1>
+        
+        <!-- 円形プログレスバーとタイマー表示 -->
+        <div class="progress-ring">
+            <svg>
+                <circle class="bg-circle" cx="140" cy="140" r="140"></circle>
+                <circle id="progressCircle" class="progress-circle" cx="140" cy="140" r="140"></circle>
+            </svg>
+            <div id="timerDisplay" class="timer-display">00:00</div>
+        </div>
+        
+        <!-- 入力エリア（分と秒を設定） -->
+        <div class="input-group">
+            <div class="input-wrapper">
+                <label for="minutes">分</label>
+                <input type="number" id="minutes" min="0" max="59" value="0" />
+            </div>
+            <div class="input-wrapper">
+                <label for="seconds">秒</label>
+                <input type="number" id="seconds" min="0" max="59" value="0" />
+            </div>
+        </div>
+        
+        <!-- ボタンエリア -->
+        <div class="button-group">
+            <button id="startBtn" class="btn-start">
+                <span>開始</span>
+            </button>
+            <button id="stopBtn" class="btn-stop" disabled>
+                <span>停止</span>
+            </button>
+            <button id="resetBtn" class="btn-reset">
+                <span>リセット</span>
+            </button>
+        </div>
+        
+        <!-- メッセージ表示エリア -->
+        <div id="message" class="message"></div>
+    </div>
+
+    <script>
+        // タイマーの状態を管理する変数
+        let totalSeconds = 0;      // 残り秒数（総計）
+        let initialSeconds = 0;    // 初期設定秒数（プログレス計算用）
+        let intervalId = null;      // setIntervalのID（停止時に使用）
+        let isRunning = false;      // タイマーが動作中かどうか
+
+        // DOM要素の取得
+        const timerDisplay = document.getElementById('timerDisplay');
+        const progressCircle = document.getElementById('progressCircle');
+        const minutesInput = document.getElementById('minutes');
+        const secondsInput = document.getElementById('seconds');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const resetBtn = document.getElementById('resetBtn');
+        const message = document.getElementById('message');
+
+        // 円形プログレスバーの設定
+        const radius = 140;
+        const circumference = 2 * Math.PI * radius; // 円周の長さ
+
+        /**
+         * プログレスバーを更新する関数
+         * 残り時間の割合に応じて円形プログレスバーを更新
+         */
+        function updateProgress() {
+            if (initialSeconds === 0) {
+                progressCircle.style.strokeDashoffset = circumference;
+                return;
+            }
+
+            // 残り時間の割合を計算（0.0 ～ 1.0）
+            const progress = totalSeconds / initialSeconds;
+            
+            // プログレスバーのオフセットを計算（残り時間に応じて）
+            const offset = circumference - (progress * circumference);
+            progressCircle.style.strokeDashoffset = offset;
+
+            // 残り時間が少ない場合の視覚的フィードバック
+            progressCircle.classList.remove('warning', 'danger');
+            if (totalSeconds <= 5 && totalSeconds > 0) {
+                progressCircle.classList.add('danger');
+            } else if (totalSeconds <= 10 && initialSeconds > 10) {
+                progressCircle.classList.add('warning');
+            }
+        }
+
+        /**
+         * タイマー表示を更新する関数
+         * 残り秒数を「MM:SS」形式の文字列に変換して表示
+         */
+        function updateDisplay() {
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = totalSeconds % 60;
+            
+            // 2桁表示にする（例：5秒 → "05"）
+            const minutesStr = String(minutes).padStart(2, '0');
+            const secondsStr = String(seconds).padStart(2, '0');
+            
+            timerDisplay.textContent = `${minutesStr}:${secondsStr}`;
+            
+            // 残り時間が少ない場合の視覚的フィードバック
+            // 10秒以下：警告色（オレンジ）、5秒以下：危険色（赤）＋アニメーション
+            timerDisplay.classList.remove('warning', 'danger');
+            if (totalSeconds <= 5 && totalSeconds > 0) {
+                timerDisplay.classList.add('danger');
+            } else if (totalSeconds <= 10 && initialSeconds > 10) {
+                timerDisplay.classList.add('warning');
+            }
+
+            // プログレスバーも更新
+            updateProgress();
+        }
+
+        /**
+         * タイマーを開始する関数
+         * 入力値から残り時間を設定し、1秒ごとにカウントダウン
+         */
+        function startTimer() {
+            // 既に動作中なら何もしない
+            if (isRunning) return;
+            
+            // 入力値から分と秒を取得
+            const minutes = parseInt(minutesInput.value) || 0;
+            const seconds = parseInt(secondsInput.value) || 0;
+            
+            // 合計秒数を計算
+            const newTotalSeconds = minutes * 60 + seconds;
+            
+            // 0秒以下ならエラー
+            if (newTotalSeconds <= 0) {
+                message.textContent = '時間を設定してください';
+                message.classList.remove('finished');
+                // エラーメッセージを3秒後に消す
+                setTimeout(() => {
+                    if (message.textContent === '時間を設定してください') {
+                        message.textContent = '';
+                    }
+                }, 3000);
+                return;
+            }
+            
+            // 初期値を設定（プログレスバー計算用）
+            if (totalSeconds === 0 || !isRunning) {
+                initialSeconds = newTotalSeconds;
+                totalSeconds = newTotalSeconds;
+            }
+            
+            // タイマー開始
+            isRunning = true;
+            message.textContent = '';
+            message.classList.remove('finished');
+            
+            // 入力欄を無効化（動作中は変更不可）
+            minutesInput.disabled = true;
+            secondsInput.disabled = true;
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            
+            // 表示を更新
+            updateDisplay();
+            
+            // 1秒ごとにカウントダウン
+            intervalId = setInterval(() => {
+                totalSeconds--;
+                updateDisplay();
+                
+                // 0秒になったら停止
+                if (totalSeconds <= 0) {
+                    stopTimer();
+                    message.textContent = '⏰ 時間になりました！';
+                    message.classList.add('finished');
+                    
+                    // プログレスバーをリセット
+                    progressCircle.style.strokeDashoffset = circumference;
+                    progressCircle.classList.remove('warning', 'danger');
+                    
+                    // 音声通知（ブラウザが許可している場合）
+                    // 注意：一部のブラウザでは自動再生が制限される場合があります
+                    try {
+                        const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OSdTQ8OUKjj8LZjHAY4kdfyzHksBSR3x/DdkEAKFF606euoVRQKRp/g8r5sIQUrgc7y2Yk2CBtpvfDknU0PDlCo4/C2YxwGOJHX8sx5LAUkd8fw3ZBAC');
+                        audio.play().catch(() => {
+                            // 音声再生が失敗してもエラーにしない（制限されている場合があるため）
+                        });
+                    } catch (e) {
+                        // 音声生成に失敗してもエラーにしない
+                    }
+                }
+            }, 1000);
+        }
+
+        /**
+         * タイマーを停止する関数
+         * カウントダウンを中断するが、残り時間は保持
+         */
+        function stopTimer() {
+            if (!isRunning) return;
+            
+            isRunning = false;
+            
+            // カウントダウンを停止
+            if (intervalId) {
+                clearInterval(intervalId);
+                intervalId = null;
+            }
+            
+            // ボタンの状態を更新
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            
+            // 入力欄を有効化
+            minutesInput.disabled = false;
+            secondsInput.disabled = false;
+        }
+
+        /**
+         * タイマーをリセットする関数
+         * 残り時間を0に戻し、表示と入力欄を初期化
+         */
+        function resetTimer() {
+            // 動作中なら先に停止
+            stopTimer();
+            
+            // 残り時間と初期値をリセット
+            totalSeconds = 0;
+            initialSeconds = 0;
+            
+            // 表示を更新
+            updateDisplay();
+            
+            // 入力欄をリセット
+            minutesInput.value = 0;
+            secondsInput.value = 0;
+            
+            // メッセージをクリア
+            message.textContent = '';
+            message.classList.remove('finished');
+            
+            // 表示スタイルをリセット
+            timerDisplay.classList.remove('warning', 'danger');
+            progressCircle.classList.remove('warning', 'danger');
+            
+            // プログレスバーをリセット
+            progressCircle.style.strokeDashoffset = circumference;
+        }
+
+        // プログレスバーの初期化
+        // 円周の長さを設定（stroke-dasharrayとstroke-dashoffsetで制御）
+        progressCircle.style.strokeDasharray = circumference;
+        progressCircle.style.strokeDashoffset = circumference;
+
+        // イベントリスナーの設定
+        // 各ボタンがクリックされたときに該当する関数を実行
+        startBtn.addEventListener('click', startTimer);
+        stopBtn.addEventListener('click', stopTimer);
+        resetBtn.addEventListener('click', resetTimer);
+        
+        // Enterキーで開始できるようにする（UX向上）
+        minutesInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                secondsInput.focus();
+            }
+        });
+        
+        secondsInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                startTimer();
+            }
+        });
+
+        // 入力値の検証（0-59の範囲に制限）
+        minutesInput.addEventListener('input', (e) => {
+            let value = parseInt(e.target.value) || 0;
+            if (value < 0) value = 0;
+            if (value > 59) value = 59;
+            e.target.value = value;
+        });
+
+        secondsInput.addEventListener('input', (e) => {
+            let value = parseInt(e.target.value) || 0;
+            if (value < 0) value = 0;
+            if (value > 59) value = 59;
+            e.target.value = value;
+        });
+    </script>
+</body>
+</html>
