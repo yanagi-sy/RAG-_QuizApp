@@ -477,6 +477,14 @@ async def generate_quizzes_with_retry(
                         batch_quizzes.append((selected_quiz, single_citation))
                         accepted_statements.append(selected_quiz.statement)
                         
+                        # 【重要】採用されたstatementをbanned_statementsに追加（次回の生成で除外）
+                        if len(banned_statements) < banned_statements_max:
+                            banned_statements.append(selected_quiz.statement)
+                            logger.debug(
+                                f"[GENERATION_RETRY] 採用されたstatementをbanned_statementsに追加: "
+                                f"'{selected_quiz.statement[:50]}...' (total={len(banned_statements)})"
+                            )
+                        
                         # debugログ
                         final_citations_count = len(selected_quiz.citations)
                         selected_citation_info = f"{corresponding_citation.source}(p.{corresponding_citation.page})" if corresponding_citation else "NONE"
