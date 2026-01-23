@@ -233,6 +233,16 @@ async def generate_quizzes_with_retry(
                 if (c.source, c.page, c.quote[:60] if c.quote else "") not in used_citation_keys
             ]
             
+            # 【デバッグ】使用可能なcitationsのsource分布を確認
+            if available_citations:
+                available_sources = {}
+                for c in available_citations:
+                    available_sources[c.source] = available_sources.get(c.source, 0) + 1
+                logger.info(
+                    f"[GENERATION_RETRY] 使用可能なcitationsのsource分布: {available_sources}, "
+                    f"expected_source={request.source_ids[0] if request.source_ids and len(request.source_ids) > 0 else 'N/A'}"
+                )
+            
             # 【品質担保】使用可能なcitationsが少ない場合の処理
             # リセットロジックを改善：目標数に達していない場合のみリセット
             # ただし、リセットしても目標数に達しない可能性があるため、早期終了を検討
@@ -289,11 +299,24 @@ async def generate_quizzes_with_retry(
             generation_tasks = []
             for citation_idx, single_citation in enumerate(selected_citations_list):
                 # debugログ: selected_citationを出力
+                expected_source = request.source_ids[0] if request.source_ids and len(request.source_ids) > 0 else None
+                source_match = "✅" if single_citation.source == expected_source else "❌"
                 logger.info(
                     f"[GENERATION:SELECTED_CITATION] citation_idx={citation_idx}, "
-                    f"source={single_citation.source}, page={single_citation.page}, "
+                    f"source={single_citation.source} {source_match}, "
+                    f"expected={expected_source}, page={single_citation.page}, "
                     f"quote_preview={single_citation.quote[:50] if single_citation.quote else 'N/A'}"
                 )
+                
+                # 【品質担保】選択されたcitationのsourceが指定ソースと一致することを確認
+                if expected_source and single_citation.source != expected_source:
+                    logger.error(
+                        f"[GENERATION:SOURCE_MISMATCH] 選択されたcitationのsourceが不一致: "
+                        f"expected={expected_source}, actual={single_citation.source}, "
+                        f"quote_preview={single_citation.quote[:50] if single_citation.quote else 'N/A'}"
+                    )
+                    # このcitationをスキップ
+                    continue
                 
                 # 1つのcitationから1問（○のみ）を生成
                 task = generate_and_validate_quizzes(
@@ -305,6 +328,17 @@ async def generate_quizzes_with_retry(
                     attempt_index=f"{attempts}-{citation_idx}",
                     banned_statements=banned_statements if len(banned_statements) > 0 else None,
                 )
+                # 【品質担保】選択されたcitationのsourceが指定ソースと一致することを確認（事前チェック）
+                expected_source = request.source_ids[0] if request.source_ids and len(request.source_ids) > 0 else None
+                if expected_source and single_citation.source != expected_source:
+                    logger.error(
+                        f"[GENERATION:SOURCE_MISMATCH] 選択されたcitationのsourceが不一致（事前チェック）: "
+                        f"expected={expected_source}, actual={single_citation.source}, "
+                        f"quote_preview={single_citation.quote[:50] if single_citation.quote else 'N/A'}"
+                    )
+                    # このcitationをスキップ（タスクに追加しない）
+                    continue
+                
                 generation_tasks.append((task, single_citation, citation_idx))
             
             # 並列実行
@@ -358,13 +392,19 @@ async def generate_quizzes_with_retry(
                         # statementの重複チェック
                         if _is_duplicate(selected_quiz.statement, accepted_statements):
                             consecutive_duplicates += 1
+                            # 【デバッグ】重複クイズのsource情報を出力
+                            quiz_sources = [c.source for c in selected_quiz.citations] if selected_quiz.citations else []
+                            expected_source = request.source_ids[0] if request.source_ids and len(request.source_ids) > 0 else None
                             logger.warning(
                                 f"重複クイズを除外: '{selected_quiz.statement[:50]}...' "
-                                f"(consecutive_duplicates={consecutive_duplicates}/{max_consecutive_duplicates})"
+                                f"(consecutive_duplicates={consecutive_duplicates}/{max_consecutive_duplicates}), "
+                                f"quiz_sources={quiz_sources}, expected_source={expected_source}"
                             )
                             all_rejected_items.append({
                                 "statement": selected_quiz.statement[:100],
                                 "reason": "duplicate_statement",
+                                "quiz_sources": quiz_sources,
+                                "expected_source": expected_source,
                             })
                             continue
                         

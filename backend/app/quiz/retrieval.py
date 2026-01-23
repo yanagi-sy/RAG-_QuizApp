@@ -142,6 +142,13 @@ def retrieve_for_quiz(
     
     logger.info(f"[QuizRetrieval] {len(documents)}件のchunkを取得（source={target_source}、フィルタ後）")
     
+    # 【デバッグ】フィルタ後のchunkのsourceを確認
+    filtered_sources = {}
+    for meta in metadatas:
+        src = meta.get("source", "unknown")
+        filtered_sources[src] = filtered_sources.get(src, 0) + 1
+    logger.info(f"[QuizRetrieval] フィルタ後のchunkのsource分布: {filtered_sources}")
+    
     # chunk_selector で levelに合う chunk を選択
     # まずは cit_min * 2 件選択（余裕を持たせる）
     select_n = max(cit_min * 2, count * 2)
@@ -153,9 +160,17 @@ def retrieve_for_quiz(
     
     selected_chunks = select_chunks(chunks, level, select_n)
     
+    # 【デバッグ】選択後のchunkのsourceを確認
+    selected_sources = {}
+    for chunk in selected_chunks:
+        src = chunk["metadata"].get("source", "unknown")
+        selected_sources[src] = selected_sources.get(src, 0) + 1
+    logger.info(f"[QuizRetrieval] chunk_selector選択後のsource分布: {selected_sources}")
+    
     # citationsを作成（最低 CIT_MIN 件）
     citations = []
     seen_quotes = set()
+    target_source_norm = unicodedata.normalize("NFC", target_source)  # 事前に正規化
     
     for chunk in selected_chunks:
         text = chunk["document"]
@@ -166,13 +181,13 @@ def retrieve_for_quiz(
         # 【品質担保】指定source以外のchunkを除外（念のため二重チェック）
         # Unicode正規化して比較
         source_norm = unicodedata.normalize("NFC", source)
-        target_source_norm = unicodedata.normalize("NFC", target_source)
         
         if source_norm != target_source_norm:
-            logger.warning(
-                f"[QuizRetrieval] citations作成時にソース不一致を検出: "
+            logger.error(
+                f"[QuizRetrieval] citations作成時にソース不一致を検出（重大）: "
                 f"source={source} (norm={source_norm}) "
-                f"target={target_source} (norm={target_source_norm})"
+                f"target={target_source} (norm={target_source_norm}), "
+                f"quote_preview={text[:50]}..."
             )
             continue
         
@@ -318,6 +333,29 @@ def retrieve_for_quiz(
     t_total_ms = (time.perf_counter() - t_start) * 1000
     
     logger.info(f"[QuizRetrieval] citations作成完了: {len(citations)}件, {round(t_total_ms, 1)}ms")
+    
+    # 【デバッグ】最終的なcitationsのsource分布を確認
+    final_citation_sources = {}
+    for c in citations:
+        final_citation_sources[c.source] = final_citation_sources.get(c.source, 0) + 1
+    logger.info(
+        f"[QuizRetrieval] 最終的なcitationsのsource分布: {final_citation_sources}, "
+        f"expected={target_source}"
+    )
+    
+    # 【品質担保】citationsに異なるsourceが含まれている場合は警告
+    if len(final_citation_sources) > 1:
+        logger.error(
+            f"[QuizRetrieval] 重大: citationsに複数のsourceが含まれています: {final_citation_sources}, "
+            f"expected={target_source}"
+        )
+    elif len(final_citation_sources) == 1:
+        actual_source = list(final_citation_sources.keys())[0]
+        if actual_source != target_source:
+            logger.error(
+                f"[QuizRetrieval] 重大: citationsのsourceが指定ソースと一致しません: "
+                f"actual={actual_source}, expected={target_source}"
+            )
     
     # debug情報を構築
     debug_info = None
