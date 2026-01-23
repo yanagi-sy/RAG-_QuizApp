@@ -193,7 +193,17 @@ def sample_ids_multi_source(
     if sources:
         # 指定されたsourceのみ（NFC正規化）
         target_sources = [unicodedata.normalize("NFC", s) for s in sources]
-        target_sources = [s for s in target_sources if s in pool]
+        # poolのキーもNFC正規化して比較
+        pool_keys_norm = {unicodedata.normalize("NFC", k): k for k in pool.keys()}
+        target_sources = [pool_keys_norm.get(s, None) for s in target_sources]
+        target_sources = [s for s in target_sources if s is not None]
+        
+        # デバッグログ：マッチング結果を出力
+        if len(target_sources) == 0:
+            logger.warning(
+                f"[ChunkPool] 指定されたsourceがpoolに存在しません。"
+                f"指定source: {sources}, poolのキー: {list(pool.keys())[:5]}..."
+            )
     else:
         # 全source
         target_sources = list(pool.keys())
