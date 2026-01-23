@@ -194,21 +194,39 @@ async def generate_quizzes_with_retry(
     banned_statements = []
     banned_statements_max = 30  # 上限（長くなりすぎないように）
     
+    # 無限ループ防止: 連続重複回数とタイムアウト管理
+    consecutive_duplicates = 0  # 連続重複回数
+    max_consecutive_duplicates = 5  # 最大連続重複回数（5回続いたら早期終了）
+    import time
+    start_time = time.perf_counter()
+    max_total_time_sec = settings.ollama_timeout_sec * 2  # LLMタイムアウトの2倍を全体タイムアウトとする
+    
     logger.info(
         f"[GENERATION_RETRY] 開始: target={target_count}, max_attempts={max_attempts} "
         f"(base={base_max_attempts}, calculated={calculated_max_attempts}), "
-        f"strategy=ペア生成方式（citationごとに正誤ペア生成→確率的選択）"
+        f"strategy=ペア生成方式（citationごとに正誤ペア生成→確率的選択）, "
+        f"max_time_sec={max_total_time_sec}"
     )
     
     while len(accepted_quizzes) < target_count and attempts < max_attempts:
         attempts += 1
+        
+        # タイムアウトチェック
+        elapsed_time = time.perf_counter() - start_time
+        if elapsed_time > max_total_time_sec:
+            logger.warning(
+                f"[GENERATION_RETRY] タイムアウト: {elapsed_time:.1f}秒経過 "
+                f"(max={max_total_time_sec}秒), accepted={len(accepted_quizzes)}, target={target_count}"
+            )
+            break
         
         # 残り必要数
         remaining = target_count - len(accepted_quizzes)
         
         logger.info(
             f"[GENERATION_RETRY] attempt={attempts}/{max_attempts}, "
-            f"accepted={len(accepted_quizzes)}, target={target_count}, remaining={remaining}"
+            f"accepted={len(accepted_quizzes)}, target={target_count}, remaining={remaining}, "
+            f"elapsed={elapsed_time:.1f}s, consecutive_duplicates={consecutive_duplicates}"
         )
         
         try:
@@ -299,6 +317,8 @@ async def generate_quizzes_with_retry(
             
             # 各ペアから確率的に片方を選択
             new_accepted_quizzes = []
+            should_break_outer = False  # 外側のwhileループを抜けるフラグ
+            
             for pair_idx, (true_quiz, false_quiz, single_citation) in enumerate(batch_pairs):
                 # single_citationはタプルから直接取得（対応関係が保証される）
                 corresponding_citation = single_citation
@@ -311,12 +331,28 @@ async def generate_quizzes_with_retry(
                 
                 # statementの重複チェック（念のため）
                 if _is_duplicate(selected_quiz.statement, accepted_statements):
-                    logger.warning(f"重複クイズを除外: '{selected_quiz.statement[:50]}...'")
+                    consecutive_duplicates += 1
+                    logger.warning(
+                        f"重複クイズを除外: '{selected_quiz.statement[:50]}...' "
+                        f"(consecutive_duplicates={consecutive_duplicates}/{max_consecutive_duplicates})"
+                    )
                     all_rejected_items.append({
                         "statement": selected_quiz.statement[:100],
                         "reason": "duplicate_statement",
                     })
+                    
+                    # 連続重複が多すぎる場合は早期終了
+                    if consecutive_duplicates >= max_consecutive_duplicates:
+                        logger.error(
+                            f"[GENERATION_RETRY] 連続重複が{consecutive_duplicates}回続いたため、早期終了します。"
+                            f"accepted={len(accepted_quizzes)}, target={target_count}"
+                        )
+                        should_break_outer = True  # 外側のwhileループも抜ける
+                        break  # 内側のforループを抜ける
                     continue
+                
+                # 重複がなかった場合はリセット
+                consecutive_duplicates = 0
                 
                 # 【重要】citationsを必ず付与（LLM出力に依存しない）
                 # selected_quizのcitationsが空または不十分な場合、single_citationを必ず付与
@@ -353,6 +389,7 @@ async def generate_quizzes_with_retry(
                 # 採用
                 new_accepted_quizzes.append(selected_quiz)
                 accepted_statements.append(selected_quiz.statement)
+                consecutive_duplicates = 0  # 採用されたらリセット
                 
                 # debugログ: selected_citationとfinal_citations_countを出力
                 final_citations_count = len(selected_quiz.citations)
@@ -373,15 +410,33 @@ async def generate_quizzes_with_retry(
                     )
                     used_citation_keys.add(citation_key)
             
+            # 連続重複が多すぎる場合は早期終了（フラグで外側のwhileループも抜ける）
+            if should_break_outer or consecutive_duplicates >= max_consecutive_duplicates:
+                if should_break_outer:
+                    logger.error(
+                        f"[GENERATION_RETRY] 連続重複が{consecutive_duplicates}回続いたため、試行を中断します。"
+                    )
+                break  # 外側のwhileループを抜ける
+            
             # 結果を集計
             accepted_quizzes.extend(new_accepted_quizzes)
             all_rejected_items.extend(batch_rejected)
             all_attempt_errors.extend(batch_attempt_errors)
             
+            # 新規採用が0件で、連続重複が続いている場合はbanned_statementsをクリア（多様性確保）
+            if len(new_accepted_quizzes) == 0 and consecutive_duplicates >= 3:
+                logger.info(
+                    f"[GENERATION_RETRY] 新規採用0件かつ連続重複{consecutive_duplicates}回のため、"
+                    f"banned_statementsをクリアして多様性を確保します"
+                )
+                banned_statements.clear()
+                used_citation_keys.clear()  # citationsもリセット
+            
             logger.info(
                 f"[GENERATION_RETRY] attempt={attempts} 完了: "
                 f"pairs_generated={len(batch_pairs)}, selected={len(new_accepted_quizzes)}, "
-                f"rejected={len(batch_rejected)}, total_accepted={len(accepted_quizzes)}"
+                f"rejected={len(batch_rejected)}, total_accepted={len(accepted_quizzes)}, "
+                f"consecutive_duplicates={consecutive_duplicates}"
             )
             
             # 統計情報をマージ
@@ -411,6 +466,12 @@ async def generate_quizzes_with_retry(
                 "message": str(e),
             })
             
+            # タイムアウトチェック
+            elapsed_time = time.perf_counter() - start_time
+            if elapsed_time > max_total_time_sec:
+                logger.warning(f"[GENERATION_RETRY] タイムアウトのため終了: {elapsed_time:.1f}秒経過")
+                break
+            
             # 最大試行回数に達した場合は終了
             if attempts >= max_attempts:
                 break
@@ -421,16 +482,30 @@ async def generate_quizzes_with_retry(
         logger.info(f"生成数が目標数（{target_count}問）を超えています（{len(accepted_quizzes)}問）。目標数にスライスします。")
         accepted_quizzes = accepted_quizzes[:target_count]
     
+    # 経過時間を計算
+    total_elapsed_time = time.perf_counter() - start_time
+    
     # 目標数に達したかどうか
     exhausted = len(accepted_quizzes) < target_count
     
     # エラー情報を構築
     error_info = None
     if exhausted and len(accepted_quizzes) == 0:
-        error_info = {
-            "type": "generation_failed",
-            "message": f"最大試行回数（{max_attempts}回）に達しましたが、クイズが生成できませんでした",
-        }
+        if total_elapsed_time > max_total_time_sec:
+            error_info = {
+                "type": "timeout",
+                "message": f"タイムアウト（{total_elapsed_time:.1f}秒経過）のため、クイズが生成できませんでした",
+            }
+        elif consecutive_duplicates >= max_consecutive_duplicates:
+            error_info = {
+                "type": "duplicate_loop",
+                "message": f"連続重複が{consecutive_duplicates}回続いたため、クイズ生成を中断しました",
+            }
+        else:
+            error_info = {
+                "type": "generation_failed",
+                "message": f"最大試行回数（{max_attempts}回）に達しましたが、クイズが生成できませんでした",
+            }
     elif exhausted:
         error_info = {
             "type": "partial_success",
@@ -448,7 +523,8 @@ async def generate_quizzes_with_retry(
     logger.info(
         f"[GENERATION_RETRY] 完了: "
         f"attempts={attempts}, accepted={len(accepted_quizzes)}, target={target_count}, "
-        f"exhausted={exhausted}"
+        f"exhausted={exhausted}, elapsed={total_elapsed_time:.1f}s, "
+        f"consecutive_duplicates={consecutive_duplicates}"
     )
     
     return (
