@@ -63,16 +63,19 @@ async def generate_and_validate_quizzes(
     banned_statements: list[str] | None = None,
 ) -> tuple[list[QuizItemSchema], list[dict], list[dict], dict]:
     """
-    LLMでクイズを生成し、バリデーションを行う（○のみ生成 → ×はmutatorで生成）
+    LLMでクイズを生成し、バリデーションを行う（○のみ生成、×はオプション）
     
     **重要**: この関数は count=1 専用です。複数問生成する場合は Router側でループしてください。
     
     戦略:
     1. LLMに1問の「正しい断言文（○）」を生成させる
     2. item を validator でチェックし、合格したものを採用
-    3. 採用した item から、mutator で「×」を生成
-    4. ×もvalidatorでチェックし、合格したものを採用
-    5. 最終的に1問（○と×の組み合わせ）を返す
+    3. （オプション）採用した item から、mutator で「×」を生成
+    4. （オプション）×もvalidatorでチェックし、合格したものを採用
+    5. 最終的に○のみ、または○と×の組み合わせを返す
+    
+    **注意**: generation_handler.pyでは○のみを採用し、×は無視されます。
+    効率化のため、×生成をスキップするオプションを追加することも検討できます。
     
     Args:
         level: 難易度
@@ -82,7 +85,7 @@ async def generate_and_validate_quizzes(
         
     Returns:
         (accepted_quizzes, rejected_items, attempt_errors, generation_stats) のタプル
-        - accepted_quizzes: バリデーション通過したクイズのリスト（最大2件：○1件+×1件）
+        - accepted_quizzes: バリデーション通過したクイズのリスト（○1件、または○1件+×1件）
         - rejected_items: バリデーション失敗したアイテム情報のリスト
         - attempt_errors: 試行ごとの失敗履歴（途中失敗を含む）
         - generation_stats: 生成統計（generated_true_count, generated_false_count, dropped_reasons）

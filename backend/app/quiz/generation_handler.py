@@ -163,17 +163,15 @@ async def generate_quizzes_with_retry(
         - aggregated_stats: 集計統計情報
     """
     import random
+    import time
     
-    # CHANGED: 新戦略では、citationごとにペアを生成するため、試行回数の計算を変更
-    # 1回の試行で5つのcitationから5ペア（計10問）を生成し、その中から目標数分を選択
-    # 目標数に達するまで、複数回試行する
+    # 【新戦略】1つのcitationから1問（○のみ）を生成し、使用済みcitationを記録
+    # これにより出題箇所の重複を必然的に避ける
     base_max_attempts = settings.quiz_max_attempts
-    # 目標数÷5（1回の試行で5ペア生成） + 余裕を持たせる
+    # 1回の試行で複数のcitationから並列生成するため、試行回数は目標数に応じて調整
+    # 1回の試行で最大5問生成を想定
     calculated_max_attempts = max(base_max_attempts, (target_count // 5) + 2)
     max_attempts = calculated_max_attempts
-    
-    # 確率的選択の設定（○と×の選択確率、デフォルトは50%ずつ）
-    true_probability = 0.5  # ○を選択する確率（50%）
     
     accepted_quizzes = []
     all_rejected_items = []
@@ -187,7 +185,7 @@ async def generate_quizzes_with_retry(
     attempts = 0
     
     # 重複対策: 使用済みcitationsを記録（同じcitationから同じクイズが生成されるのを防ぐ）
-    # 【新戦略】1つのcitationから1ペアのみ生成するため、citationの重複は発生しない
+    # 1つのcitationから1問のみ生成するため、citationの重複は必然的に避けられる
     used_citation_keys = set()
     
     # banned_statements: 既出・重複で落としたstatementを保持（retry時にLLMに渡す）
@@ -197,14 +195,13 @@ async def generate_quizzes_with_retry(
     # 無限ループ防止: 連続重複回数とタイムアウト管理
     consecutive_duplicates = 0  # 連続重複回数
     max_consecutive_duplicates = 5  # 最大連続重複回数（5回続いたら早期終了）
-    import time
     start_time = time.perf_counter()
     max_total_time_sec = settings.ollama_timeout_sec * 2  # LLMタイムアウトの2倍を全体タイムアウトとする
     
     logger.info(
         f"[GENERATION_RETRY] 開始: target={target_count}, max_attempts={max_attempts} "
         f"(base={base_max_attempts}, calculated={calculated_max_attempts}), "
-        f"strategy=ペア生成方式（citationごとに正誤ペア生成→確率的選択）, "
+        f"strategy=1問ずつ生成方式（citationごとに1問生成→使用済みcitationを除外）, "
         f"max_time_sec={max_total_time_sec}"
     )
     
@@ -245,22 +242,29 @@ async def generate_quizzes_with_retry(
                 used_citation_keys.clear()
                 available_citations = citations
             
-            # 使用可能なcitationsから5件を選択（1回の試行で5ペア生成）
-            if len(available_citations) >= 5:
-                selected_citations_list = random.sample(available_citations, 5)
+            # 残り必要数を計算（1回の試行で最大5問生成を想定）
+            remaining = target_count - len(accepted_quizzes)
+            batch_size = min(5, remaining, len(available_citations))
+            
+            # 使用可能なcitationsからbatch_size件を選択（1回の試行で複数問生成）
+            if len(available_citations) >= batch_size:
+                selected_citations_list = random.sample(available_citations, batch_size)
             else:
-                selected_citations_list = available_citations[:5] if len(available_citations) > 0 else []
+                selected_citations_list = available_citations[:batch_size] if len(available_citations) > 0 else []
             
             if len(selected_citations_list) == 0:
                 logger.warning("[GENERATION_RETRY] 使用可能なcitationsがありません")
                 break
             
-            # 【新戦略】各citationから正誤ペアを生成
-            batch_pairs = []  # (true_quiz, false_quiz, single_citation) のタプルリスト
+            # 【新戦略】各citationから1問（○のみ）を生成
+            batch_quizzes = []  # 生成されたクイズのリスト
             batch_rejected = []
             batch_attempt_errors = []
             batch_stats = {}
             
+            # 並列生成（効率化のため）
+            import asyncio
+            generation_tasks = []
             for citation_idx, single_citation in enumerate(selected_citations_list):
                 # debugログ: selected_citationを出力
                 logger.info(
@@ -269,153 +273,138 @@ async def generate_quizzes_with_retry(
                     f"quote_preview={single_citation.quote[:50] if single_citation.quote else 'N/A'}"
                 )
                 
-                # 1つのcitationから正誤ペアを生成
-                pair_accepted, pair_rejected, pair_attempt_errors, pair_stats = await generate_and_validate_quizzes(
+                # 1つのcitationから1問（○のみ）を生成
+                task = generate_and_validate_quizzes(
                     level=request.level,
-                    count=1,  # 1問ずつ生成（○と×のペアが返される）
+                    count=1,  # 1問ずつ生成
                     topic=request.topic,
                     citations=[single_citation],  # 1つのcitationのみを使用
                     request_id=request_id,
                     attempt_index=f"{attempts}-{citation_idx}",
                     banned_statements=banned_statements if len(banned_statements) > 0 else None,
                 )
-                
-                # 統計情報をマージ
-                for key, value in pair_stats.items():
-                    if key in batch_stats:
-                        if isinstance(value, (int, float)):
-                            batch_stats[key] += value
-                        elif isinstance(value, dict):
-                            for k, v in value.items():
-                                prev = batch_stats[key].get(k)
-                                if isinstance(v, (int, float)) and isinstance(prev, (int, float)):
-                                    batch_stats[key][k] = prev + v
-                                else:
-                                    batch_stats[key][k] = v
-                    else:
-                        batch_stats[key] = value
-                
-                batch_rejected.extend(pair_rejected)
-                batch_attempt_errors.extend(pair_attempt_errors)
-                
-                # ○と×を分ける
-                pair_true = [q for q in pair_accepted if q.answer_bool]
-                pair_false = [q for q in pair_accepted if not q.answer_bool]
-                
-                # ペアが揃っている場合のみ採用（single_citationも一緒に保持）
-                if len(pair_true) > 0 and len(pair_false) > 0:
-                    batch_pairs.append((pair_true[0], pair_false[0], single_citation))
-                    logger.info(
-                        f"[GENERATION_RETRY] citation {citation_idx+1}/5: ペア生成成功 "
-                        f"(○: '{pair_true[0].statement[:40]}...', ×: '{pair_false[0].statement[:40]}...')"
-                    )
-                else:
-                    logger.warning(
-                        f"[GENERATION_RETRY] citation {citation_idx+1}/5: ペア生成失敗 "
-                        f"(○={len(pair_true)}, ×={len(pair_false)})"
-                    )
+                generation_tasks.append((task, single_citation, citation_idx))
             
-            # 各ペアから確率的に片方を選択
-            new_accepted_quizzes = []
-            should_break_outer = False  # 外側のwhileループを抜けるフラグ
-            
-            for pair_idx, (true_quiz, false_quiz, single_citation) in enumerate(batch_pairs):
-                # single_citationはタプルから直接取得（対応関係が保証される）
-                corresponding_citation = single_citation
-                
-                # 確率的に○または×を選択
-                selected_quiz = random.choices(
-                    [true_quiz, false_quiz],
-                    weights=[true_probability, 1 - true_probability]
-                )[0]
-                
-                # statementの重複チェック（念のため）
-                if _is_duplicate(selected_quiz.statement, accepted_statements):
-                    consecutive_duplicates += 1
-                    logger.warning(
-                        f"重複クイズを除外: '{selected_quiz.statement[:50]}...' "
-                        f"(consecutive_duplicates={consecutive_duplicates}/{max_consecutive_duplicates})"
-                    )
-                    all_rejected_items.append({
-                        "statement": selected_quiz.statement[:100],
-                        "reason": "duplicate_statement",
-                    })
+            # 並列実行
+            for task, single_citation, citation_idx in generation_tasks:
+                try:
+                    quiz_accepted, quiz_rejected, quiz_attempt_errors, quiz_stats = await task
                     
-                    # 連続重複が多すぎる場合は早期終了
-                    if consecutive_duplicates >= max_consecutive_duplicates:
-                        logger.error(
-                            f"[GENERATION_RETRY] 連続重複が{consecutive_duplicates}回続いたため、早期終了します。"
-                            f"accepted={len(accepted_quizzes)}, target={target_count}"
-                        )
-                        should_break_outer = True  # 外側のwhileループも抜ける
-                        break  # 内側のforループを抜ける
-                    continue
-                
-                # 重複がなかった場合はリセット
-                consecutive_duplicates = 0
-                
-                # 【重要】citationsを必ず付与（LLM出力に依存しない）
-                # selected_quizのcitationsが空または不十分な場合、single_citationを必ず付与
-                if not selected_quiz.citations or len(selected_quiz.citations) == 0:
-                    if corresponding_citation:
-                        # Pydanticモデルを更新（model_copyを使用）
-                        selected_quiz = selected_quiz.model_copy(update={"citations": [corresponding_citation]})
+                    # 統計情報をマージ
+                    for key, value in quiz_stats.items():
+                        if key in batch_stats:
+                            if isinstance(value, (int, float)):
+                                batch_stats[key] += value
+                            elif isinstance(value, dict):
+                                for k, v in value.items():
+                                    prev = batch_stats[key].get(k)
+                                    if isinstance(v, (int, float)) and isinstance(prev, (int, float)):
+                                        batch_stats[key][k] = prev + v
+                                    else:
+                                        batch_stats[key][k] = v
+                        else:
+                            batch_stats[key] = value
+                    
+                    batch_rejected.extend(quiz_rejected)
+                    batch_attempt_errors.extend(quiz_attempt_errors)
+                    
+                    # ○のみを採用（×は生成しない）
+                    quiz_true = [q for q in quiz_accepted if q.answer_bool]
+                    
+                    if len(quiz_true) > 0:
+                        # citationを確実に紐付け
+                        selected_quiz = quiz_true[0]
+                        corresponding_citation = single_citation
+                        
+                        # statementの重複チェック
+                        if _is_duplicate(selected_quiz.statement, accepted_statements):
+                            consecutive_duplicates += 1
+                            logger.warning(
+                                f"重複クイズを除外: '{selected_quiz.statement[:50]}...' "
+                                f"(consecutive_duplicates={consecutive_duplicates}/{max_consecutive_duplicates})"
+                            )
+                            all_rejected_items.append({
+                                "statement": selected_quiz.statement[:100],
+                                "reason": "duplicate_statement",
+                            })
+                            continue
+                        
+                        # 重複がなかった場合はリセット
+                        consecutive_duplicates = 0
+                        
+                        # 【重要】citationsを必ず付与（LLM出力に依存しない）
+                        if not selected_quiz.citations or len(selected_quiz.citations) == 0:
+                            if corresponding_citation:
+                                selected_quiz = selected_quiz.model_copy(update={"citations": [corresponding_citation]})
+                                logger.info(
+                                    f"[GENERATION:CITATION_ASSIGNED] quizにcitationsがなかったため、selected_citationを付与: "
+                                    f"source={corresponding_citation.source}, page={corresponding_citation.page}"
+                                )
+                        else:
+                            # citationsが既にある場合でも、selected_citationが含まれているか確認
+                            if corresponding_citation:
+                                citation_sources = [c.source for c in selected_quiz.citations]
+                                if corresponding_citation.source not in citation_sources:
+                                    updated_citations = [corresponding_citation] + selected_quiz.citations
+                                    selected_quiz = selected_quiz.model_copy(update={"citations": updated_citations})
+                                    logger.info(
+                                        f"[GENERATION:CITATION_PREPENDED] selected_citationを先頭に追加: "
+                                        f"source={corresponding_citation.source}, page={corresponding_citation.page}, "
+                                        f"final_citations_count={len(updated_citations)}"
+                                    )
+                                else:
+                                    logger.info(
+                                        f"[GENERATION:CITATION_VERIFIED] selected_citationが既に含まれています: "
+                                        f"source={corresponding_citation.source}, final_citations_count={len(selected_quiz.citations)}"
+                                    )
+                        
+                        # 採用
+                        batch_quizzes.append((selected_quiz, single_citation))
+                        accepted_statements.append(selected_quiz.statement)
+                        
+                        # debugログ
+                        final_citations_count = len(selected_quiz.citations)
+                        selected_citation_info = f"{corresponding_citation.source}(p.{corresponding_citation.page})" if corresponding_citation else "NONE"
                         logger.info(
-                            f"[GENERATION:CITATION_ASSIGNED] quizにcitationsがなかったため、selected_citationを付与: "
-                            f"source={corresponding_citation.source}, page={corresponding_citation.page}"
+                            f"[GENERATION:DEBUG] citation {citation_idx+1}/{batch_size}: 生成成功, "
+                            f"selected_citation={selected_citation_info}, "
+                            f"final_citations_count={final_citations_count}, "
+                            f"quiz_statement_preview={selected_quiz.statement[:50]}"
                         )
                     else:
-                        logger.warning(f"[GENERATION:CITATION_MISSING] 対応するcitationが見つかりません（pair_idx={pair_idx}）")
-                
-                # citationsが既にある場合でも、selected_citationが含まれているか確認
-                # 含まれていない場合は、selected_citationを先頭に追加（確実に紐付け）
-                if corresponding_citation:
-                    citation_sources = [c.source for c in selected_quiz.citations]
-                    if corresponding_citation.source not in citation_sources:
-                        # selected_citationを先頭に追加
-                        updated_citations = [corresponding_citation] + selected_quiz.citations
-                        selected_quiz = selected_quiz.model_copy(update={"citations": updated_citations})
-                        logger.info(
-                            f"[GENERATION:CITATION_PREPENDED] selected_citationを先頭に追加: "
-                            f"source={corresponding_citation.source}, page={corresponding_citation.page}, "
-                            f"final_citations_count={len(updated_citations)}"
+                        logger.warning(
+                            f"[GENERATION_RETRY] citation {citation_idx+1}/{batch_size}: 生成失敗（○が生成されませんでした）"
                         )
-                    else:
-                        logger.info(
-                            f"[GENERATION:CITATION_VERIFIED] selected_citationが既に含まれています: "
-                            f"source={corresponding_citation.source}, final_citations_count={len(selected_quiz.citations)}"
-                        )
-                
-                # 採用
-                new_accepted_quizzes.append(selected_quiz)
-                accepted_statements.append(selected_quiz.statement)
-                consecutive_duplicates = 0  # 採用されたらリセット
-                
-                # debugログ: selected_citationとfinal_citations_countを出力
-                final_citations_count = len(selected_quiz.citations)
-                selected_citation_info = f"{corresponding_citation.source}(p.{corresponding_citation.page})" if corresponding_citation else "NONE"
-                logger.info(
-                    f"[GENERATION:DEBUG] selected_citation={selected_citation_info}, "
-                    f"final_citations_count={final_citations_count}, "
-                    f"quiz_statement_preview={selected_quiz.statement[:50]}"
+                except Exception as e:
+                    logger.error(f"[GENERATION_RETRY] citation {citation_idx+1}/{batch_size} でエラー: {type(e).__name__}: {e}")
+            
+            # 連続重複が多すぎる場合は早期終了
+            should_break_outer = False
+            if consecutive_duplicates >= max_consecutive_duplicates:
+                logger.error(
+                    f"[GENERATION_RETRY] 連続重複が{consecutive_duplicates}回続いたため、早期終了します。"
+                    f"accepted={len(accepted_quizzes)}, target={target_count}"
                 )
+                should_break_outer = True
+            
+            # 結果を集計
+            new_accepted_quizzes = []
+            for selected_quiz, single_citation in batch_quizzes:
+                new_accepted_quizzes.append(selected_quiz)
                 
                 # 使用済みcitationsを記録（このcitationは使用済みとしてマーク）
-                # ペアの両方のcitationsを記録（○と×は同じcitationを使用）
-                for citation in true_quiz.citations:
-                    citation_key = (
-                        citation.source,
-                        citation.page,
-                        citation.quote[:60] if citation.quote else ""
-                    )
-                    used_citation_keys.add(citation_key)
+                citation_key = (
+                    single_citation.source,
+                    single_citation.page,
+                    single_citation.quote[:60] if single_citation.quote else ""
+                )
+                used_citation_keys.add(citation_key)
             
             # 連続重複が多すぎる場合は早期終了（フラグで外側のwhileループも抜ける）
-            if should_break_outer or consecutive_duplicates >= max_consecutive_duplicates:
-                if should_break_outer:
-                    logger.error(
-                        f"[GENERATION_RETRY] 連続重複が{consecutive_duplicates}回続いたため、試行を中断します。"
-                    )
+            if should_break_outer:
+                logger.error(
+                    f"[GENERATION_RETRY] 連続重複が{consecutive_duplicates}回続いたため、試行を中断します。"
+                )
                 break  # 外側のwhileループを抜ける
             
             # 結果を集計
@@ -434,7 +423,7 @@ async def generate_quizzes_with_retry(
             
             logger.info(
                 f"[GENERATION_RETRY] attempt={attempts} 完了: "
-                f"pairs_generated={len(batch_pairs)}, selected={len(new_accepted_quizzes)}, "
+                f"quizzes_generated={len(batch_quizzes)}, accepted={len(new_accepted_quizzes)}, "
                 f"rejected={len(batch_rejected)}, total_accepted={len(accepted_quizzes)}, "
                 f"consecutive_duplicates={consecutive_duplicates}"
             )
