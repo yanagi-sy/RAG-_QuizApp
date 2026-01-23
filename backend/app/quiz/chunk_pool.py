@@ -211,6 +211,14 @@ def sample_ids_multi_source(
     """
     # source一覧を取得
     if sources:
+        # 【品質担保】単一ソース固定のため、sourcesは1件のみであることを確認
+        if len(sources) > 1:
+            logger.error(
+                f"[ChunkPool] sample_ids_multi_source: sourcesが複数指定されています（{len(sources)}件）。"
+                f"単一ソース固定のため、最初の1件のみを使用します。"
+            )
+            sources = [sources[0]]
+        
         # 指定されたsourceのみ（NFC正規化）
         target_sources_norm = [unicodedata.normalize("NFC", s) for s in sources]
         # poolのキーもNFC正規化して比較
@@ -221,22 +229,29 @@ def sample_ids_multi_source(
             matched_key = pool_keys_norm.get(source_norm)
             if matched_key:
                 target_sources.append(matched_key)
+                logger.info(
+                    f"[ChunkPool] sourceマッチング成功: specified={source_norm} -> pool_key={matched_key}"
+                )
             else:
                 # 【品質担保】マッチしない場合はエラーログを出力し、そのsourceをスキップ
                 logger.error(
-                    f"[ChunkPool] 指定されたsourceがpoolに存在しません: "
+                    f"[ChunkPool] 【重大】指定されたsourceがpoolに存在しません: "
                     f"specified={source_norm}, pool_keys={list(pool.keys())[:10]}"
                 )
         
         # 【品質担保】target_sourcesが空の場合はエラーを返す（全sourceからサンプルしない）
         if len(target_sources) == 0:
             logger.error(
-                f"[ChunkPool] 指定されたsourceがpoolに存在しません。空のリストを返します。"
+                f"[ChunkPool] 【重大】指定されたsourceがpoolに存在しません。空のリストを返します。"
                 f"指定source: {sources}, poolのキー: {list(pool.keys())[:10]}"
             )
             return []
     else:
         # 全source（ただし、単一ソース固定のため通常は使用されない）
+        logger.warning(
+            f"[ChunkPool] sample_ids_multi_source: sourcesがNoneです。"
+            f"単一ソース固定のため、このケースは通常発生しません。"
+        )
         target_sources = list(pool.keys())
     
     if len(target_sources) == 0:
