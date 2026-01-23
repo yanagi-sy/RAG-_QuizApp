@@ -4,134 +4,21 @@ Quiz生成の再試行ロジック
 generate_and_validate_quizzes を呼び出して、複数回試行する。
 """
 import logging
-import re
 import unicodedata
 from typing import Dict, Any
 
 from app.schemas.quiz import QuizGenerateRequest, QuizItem as QuizItemSchema
 from app.schemas.common import Citation
 from app.quiz.generator import generate_and_validate_quizzes
+from app.quiz.duplication_checker import (
+    is_duplicate_statement,
+    is_citation_duplicate,
+    create_citation_key,
+)
 from app.core.settings import settings
 
 # ロガー設定
 logger = logging.getLogger(__name__)
-
-
-def _normalize_statement(statement: str) -> str:
-    """
-    statementを正規化して比較用に使用
-    
-    Args:
-        statement: クイズのstatement
-        
-    Returns:
-        正規化されたstatement（空白除去、句読点統一、小文字化）
-    """
-    # 空白を除去
-    normalized = re.sub(r'\s+', '', statement)
-    # 句読点を統一（句読点を除去）
-    normalized = normalized.replace('。', '').replace('、', '').replace('.', '').replace(',', '')
-    return normalized.lower()
-
-
-def _get_core_content_key(statement: str) -> str:
-    """
-    コア内容キーを取得（否定語除去後の正規化）
-    
-    重複判定用に、否定語（しない/行わない/禁止/不要/ではない等）を除去した
-    コア内容のみで比較する。これにより「行う/行わない」の単純反転が
-    同一セットに混入しないようにする。
-    
-    Args:
-        statement: クイズのstatement
-        
-    Returns:
-        コア内容キー（否定語除去後の正規化）
-    """
-    # 否定語パターン（優先度順）
-    negation_patterns = [
-        r'しない',
-        r'行わない',
-        r'ではない',
-        r'なくてもよい',
-        r'禁止',
-        r'不要',
-        r'してはいけない',
-        r'行ってはいけない',
-        r'してはならない',
-        r'行ってはならない',
-    ]
-    
-    # 否定語を除去
-    core = statement
-    for pattern in negation_patterns:
-        core = re.sub(pattern, '', core)
-    
-    # 正規化（空白除去、句読点除去、小文字化）
-    normalized = re.sub(r'\s+', '', core)
-    normalized = normalized.replace('。', '').replace('、', '').replace('.', '').replace(',', '')
-    return normalized.lower()
-
-
-def _is_duplicate(new_statement: str, existing_statements: list[str]) -> bool:
-    """
-    新しいstatementが既存のものと重複しているかチェック
-    
-    重複判定は2段階で行う:
-    1. 通常の正規化（空白・句読点除去）で完全一致チェック
-    2. コア内容キー（否定語除去後）で一致チェック（「行う/行わない」の単純反転を検出）
-    
-    Args:
-        new_statement: 新しいstatement
-        existing_statements: 既存のstatementリスト
-        
-    Returns:
-        True: 重複している、False: 重複していない
-    """
-    # 1. 通常の正規化で完全一致チェック
-    normalized_new = _normalize_statement(new_statement)
-    for existing in existing_statements:
-        normalized_existing = _normalize_statement(existing)
-        if normalized_new == normalized_existing:
-            logger.info(f"重複検出（完全一致）: '{new_statement[:50]}...' と '{existing[:50]}...' が重複しています")
-            return True
-    
-    # 2. コア内容キー（否定語除去後）で一致チェック
-    core_key_new = _get_core_content_key(new_statement)
-    for existing in existing_statements:
-        core_key_existing = _get_core_content_key(existing)
-        if core_key_new == core_key_existing and core_key_new:  # 空文字列は除外
-            logger.info(f"重複検出（コア内容一致）: '{new_statement[:50]}...' と '{existing[:50]}...' がコア内容で重複しています")
-            return True
-    
-    return False
-
-
-def _is_citation_duplicate(quiz_citations: list[Citation], used_citation_keys: set) -> bool:
-    """
-    クイズのcitationsが既に使用済みかチェック
-    
-    Args:
-        quiz_citations: クイズのcitationsリスト
-        used_citation_keys: 使用済みcitationキーのセット
-        
-    Returns:
-        True: 重複している（既に使用済みのcitationを含む）、False: 重複していない
-    """
-    for citation in quiz_citations:
-        citation_key = (
-            citation.source,
-            citation.page,
-            citation.quote[:60] if citation.quote else ""
-        )
-        if citation_key in used_citation_keys:
-            # TypeError対策: pageを文字列に変換
-            page_str = str(citation.page) if citation.page is not None else "None"
-            logger.info(
-                f"出題箇所重複検出: '{citation.source}' (p.{page_str}) は既に使用済みです"
-            )
-            return True
-    return False
 
 
 async def generate_quizzes_with_retry(
@@ -206,7 +93,7 @@ async def generate_quizzes_with_retry(
             # 各試行で異なるcitationsを使うことで、多様なクイズを生成
             available_citations = [
                 c for c in citations
-                if (c.source, c.page, c.quote[:60] if c.quote else "") not in used_citation_keys
+                if create_citation_key(c) not in used_citation_keys
             ]
             
             # 使用可能なcitationsが少ない場合、または連続重複が多すぎる場合は、使用済みをリセット
@@ -347,7 +234,7 @@ async def generate_quizzes_with_retry(
                             continue
                 
                 # 重複チェック1: statementの重複
-                if _is_duplicate(true_quiz.statement, accepted_statements):
+                if is_duplicate_statement(true_quiz.statement, accepted_statements):
                     logger.warning(f"重複クイズを除外: '{true_quiz.statement[:50]}...'")
                     all_rejected_items.append({
                         "statement": true_quiz.statement[:100],
@@ -360,7 +247,7 @@ async def generate_quizzes_with_retry(
                     continue
                 
                 # 重複チェック2: citationの重複（出題箇所の重複）
-                if _is_citation_duplicate(true_quiz.citations, used_citation_keys):
+                if is_citation_duplicate(true_quiz.citations, used_citation_keys):
                     # TypeError対策: pageを文字列に変換
                     citation_strs = [
                         f"{c.source}(p.{c.page})" if c.page is not None else f"{c.source}(p.None)"
@@ -407,7 +294,7 @@ async def generate_quizzes_with_retry(
                             continue
                 
                 # 重複チェック1: statementの重複
-                if _is_duplicate(false_quiz.statement, accepted_statements):
+                if is_duplicate_statement(false_quiz.statement, accepted_statements):
                     logger.warning(f"重複クイズを除外: '{false_quiz.statement[:50]}...'")
                     all_rejected_items.append({
                         "statement": false_quiz.statement[:100],
@@ -423,12 +310,11 @@ async def generate_quizzes_with_retry(
                 # 注意: ×は○から生成されるため、同じcitationを使用している可能性が高い
                 # しかし、対応する○が採用された場合、×も採用する（○と×のペアは1つのcitationとして扱う）
                 # ただし、他の○問題と同じcitationを使用している場合は除外する
-                if _is_citation_duplicate(false_quiz.citations, used_citation_keys):
+                if is_citation_duplicate(false_quiz.citations, used_citation_keys):
                     # 対応する○が採用候補にあるかチェック（同じcitationを使用している可能性）
                     has_corresponding_true = any(
                         any(
-                            (c1.source, c1.page, c1.quote[:60] if c1.quote else "") ==
-                            (c2.source, c2.page, c2.quote[:60] if c2.quote else "")
+                            create_citation_key(c1) == create_citation_key(c2)
                             for c1 in false_quiz.citations
                             for c2 in true_quiz.citations
                         )
@@ -467,11 +353,7 @@ async def generate_quizzes_with_retry(
                 
                 # 使用済みcitationsを記録（○のcitationsを記録）
                 for citation in true_quiz.citations:
-                    citation_key = (
-                        citation.source,
-                        citation.page,
-                        citation.quote[:60] if citation.quote else ""
-                    )
+                    citation_key = create_citation_key(citation)
                     used_citation_keys.add(citation_key)
             
             for false_quiz in processed_false_quizzes:
@@ -483,11 +365,7 @@ async def generate_quizzes_with_retry(
                 # 注意: ×は○から生成されるため、同じcitationを使用している可能性が高い
                 # その場合、既に使用済みになっているが、念のため記録する
                 for citation in false_quiz.citations:
-                    citation_key = (
-                        citation.source,
-                        citation.page,
-                        citation.quote[:60] if citation.quote else ""
-                    )
+                    citation_key = create_citation_key(citation)
                     used_citation_keys.add(citation_key)
             
             # 重複が連続で発生した場合の警告
