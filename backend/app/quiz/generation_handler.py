@@ -428,6 +428,13 @@ async def generate_quizzes_with_retry(
                                 "quiz_sources": quiz_sources,
                                 "expected_source": expected_source,
                             })
+                            # 【重要】重複したstatementをbanned_statementsに追加（次回のLLM生成で除外）
+                            if len(banned_statements) < banned_statements_max:
+                                banned_statements.append(selected_quiz.statement)
+                                logger.info(
+                                    f"[GENERATION_RETRY] 重複statementをbanned_statementsに追加: "
+                                    f"'{selected_quiz.statement[:50]}...' (total={len(banned_statements)})"
+                                )
                             continue
                         
                         # 重複がなかった場合はリセット
@@ -528,6 +535,17 @@ async def generate_quizzes_with_retry(
                 )
                 banned_statements.clear()
                 used_citation_keys.clear()  # citationsもリセット
+            
+            # 【重要】rejected_itemsから重複statementをbanned_statementsに追加
+            for rejected_item in batch_rejected:
+                if rejected_item.get("reason") == "duplicate_statement":
+                    statement = rejected_item.get("statement", "")
+                    if statement and statement not in banned_statements and len(banned_statements) < banned_statements_max:
+                        banned_statements.append(statement)
+                        logger.info(
+                            f"[GENERATION_RETRY] rejected_itemからbanned_statementsに追加: "
+                            f"'{statement[:50]}...' (total={len(banned_statements)})"
+                        )
             
             logger.info(
                 f"[GENERATION_RETRY] attempt={attempts} 完了: "
