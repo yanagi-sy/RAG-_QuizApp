@@ -111,6 +111,13 @@ def make_false_statement(statement: str) -> str:
     """
     original = statement
     
+    # 【修正】英語の文が来た場合の処理（本来はプロンプトで禁止しているが、保険として）
+    # 英語の文が来た場合は、日本語に変換できないため、元の文を返す（validatorで弾かれる）
+    if any(ord(c) < 128 and c.isalpha() for c in statement[:50]):
+        # 最初の50文字に英字が含まれている場合は英語の可能性が高い
+        logger.warning(f"Mutator: 英語の文が検出されました（処理をスキップ）: {statement[:50]}")
+        return original
+    
     # 各ルールを試す
     for rule in NEGATION_RULES:
         if isinstance(rule, tuple) and len(rule) == 2:

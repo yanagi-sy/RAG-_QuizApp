@@ -132,6 +132,7 @@ def retrieve_for_quiz(
         logger.error(f"[QuizRetrieval] chunkが0件です（source={target_source}）")
         return ([], {"error": f"指定ソース '{target_source}' からchunkが0件です（根拠不足）"})
     
+<<<<<<< HEAD
     # 【品質担保】指定source以外のchunkを除外
     filtered_chunks = []
     source_counts = {}  # デバッグ用：各sourceのchunk数をカウント
@@ -140,11 +141,26 @@ def retrieve_for_quiz(
     for chunk_id, doc, meta in zip(ids, documents, metadatas):
         chunk_source = meta.get("source", "unknown")
         # Unicode正規化して比較（NFC正規化）
+=======
+    # 【品質担保】指定source以外のchunkを除外（取得後にフィルタ）
+    # 注意: collection.get()はwhereパラメータをサポートしていないため、取得後にフィルタを適用
+    filtered_chunks = []
+    source_counts = {}  # デバッグ用：各sourceのchunk数をカウント
+    target_source_norm = None
+    
+    if source_ids and len(source_ids) > 0:
+        target_source_norm = unicodedata.normalize("NFC", source_ids[0])
+        logger.info(f"[QuizRetrieval] sourceフィルタを適用: {target_source_norm}")
+    
+    for chunk_id, doc, meta in zip(ids, documents, metadatas):
+        chunk_source = meta.get("source", "unknown")
+>>>>>>> ai-generated
         chunk_source_norm = unicodedata.normalize("NFC", chunk_source)
         
         # デバッグ用：sourceをカウント
         source_counts[chunk_source] = source_counts.get(chunk_source, 0) + 1
         
+<<<<<<< HEAD
         if chunk_source_norm == target_source_norm:
             filtered_chunks.append((chunk_id, doc, meta))
         else:
@@ -164,10 +180,38 @@ def retrieve_for_quiz(
         )
         return ([], {"error": f"指定ソース '{target_source}' に一致するchunkが0件です（根拠不足）"})
     
+=======
+        # source_idsが指定されている場合、指定source以外を除外
+        if target_source_norm:
+            if chunk_source_norm == target_source_norm:
+                filtered_chunks.append((chunk_id, doc, meta))
+            else:
+                # 指定source以外のchunkが検出された場合はエラーログを出力
+                logger.error(
+                    f"[QuizRetrieval] 【重大】指定source以外のchunkを検出（除外）: "
+                    f"source={chunk_source} (norm={chunk_source_norm}) "
+                    f"target={target_source_norm}, "
+                    f"chunk_id={chunk_id}, quote_preview={doc[:50] if doc else 'N/A'}..."
+                )
+        else:
+            # source_idsが指定されていない場合は全件採用
+            filtered_chunks.append((chunk_id, doc, meta))
+    
+    # フィルタ後のchunkが0件の場合はエラーを返す
+    if len(filtered_chunks) == 0:
+        logger.error(
+            f"[QuizRetrieval] 指定ソース '{target_source_norm}' に一致するchunkが0件です（根拠不足）。"
+            f"取得されたchunkのsource分布: {source_counts}"
+        )
+        return ([], {"error": f"指定ソース '{target_source_norm}' に一致するchunkが0件です（根拠不足）"})
+    
+    # フィルタ後のchunkを使用
+>>>>>>> ai-generated
     ids = [c[0] for c in filtered_chunks]
     documents = [c[1] for c in filtered_chunks]
     metadatas = [c[2] for c in filtered_chunks]
     
+<<<<<<< HEAD
     logger.info(f"[QuizRetrieval] {len(documents)}件のchunkを取得（source={target_source}、フィルタ後）")
     
     # 【デバッグ】フィルタ後のchunkのsourceを確認
@@ -176,6 +220,9 @@ def retrieve_for_quiz(
         src = meta.get("source", "unknown")
         filtered_sources[src] = filtered_sources.get(src, 0) + 1
     logger.info(f"[QuizRetrieval] フィルタ後のchunkのsource分布: {filtered_sources}")
+=======
+    logger.info(f"[QuizRetrieval] {len(documents)}件のchunkを取得（source分布: {source_counts}、フィルタ後: {len(filtered_chunks)}件）")
+>>>>>>> ai-generated
     
     # chunk_selector で levelに合う chunk を選択
     # まずは cit_min * 2 件選択（余裕を持たせる）
@@ -283,13 +330,14 @@ def retrieve_for_quiz(
             logger.error(f"[QuizRetrieval] 再取得失敗: {type(e).__name__}: {e}")
             break
         
-        ids = results.get("ids", [])
-        documents = results.get("documents", [])
-        metadatas = results.get("metadatas", [])
+        ids_retry = results.get("ids", [])
+        documents_retry = results.get("documents", [])
+        metadatas_retry = results.get("metadatas", [])
         
-        if len(documents) == 0:
+        if len(documents_retry) == 0:
             break
         
+<<<<<<< HEAD
         # 【品質担保】指定source以外のchunkを除外
         filtered_chunks = []
         source_counts_retry = {}  # デバッグ用：各sourceのchunk数をカウント
@@ -298,11 +346,24 @@ def retrieve_for_quiz(
         for chunk_id, doc, meta in zip(ids, documents, metadatas):
             chunk_source = meta.get("source", "unknown")
             # Unicode正規化して比較（NFC正規化）
+=======
+        # 【品質担保】指定source以外のchunkを除外（取得後にフィルタ）
+        filtered_chunks_retry = []
+        source_counts_retry = {}  # デバッグ用：各sourceのchunk数をカウント
+        target_source_norm_retry = None
+        
+        if source_ids and len(source_ids) > 0:
+            target_source_norm_retry = unicodedata.normalize("NFC", source_ids[0])
+        
+        for chunk_id, doc, meta in zip(ids_retry, documents_retry, metadatas_retry):
+            chunk_source = meta.get("source", "unknown")
+>>>>>>> ai-generated
             chunk_source_norm = unicodedata.normalize("NFC", chunk_source)
             
             # デバッグ用：sourceをカウント
             source_counts_retry[chunk_source] = source_counts_retry.get(chunk_source, 0) + 1
             
+<<<<<<< HEAD
             if chunk_source_norm == target_source_norm:
                 filtered_chunks.append((chunk_id, doc, meta))
             else:
@@ -316,18 +377,44 @@ def retrieve_for_quiz(
         if len(filtered_chunks) == 0:
             logger.error(
                 f"[QuizRetrieval] 再取得でも指定ソース '{target_source}' に一致するchunkが0件です。"
+=======
+            # source_idsが指定されている場合、指定source以外を除外
+            if target_source_norm_retry:
+                if chunk_source_norm == target_source_norm_retry:
+                    filtered_chunks_retry.append((chunk_id, doc, meta))
+                else:
+                    logger.debug(
+                        f"[QuizRetrieval] 再取得時のソース不一致: "
+                        f"source={chunk_source} (norm={chunk_source_norm}) "
+                        f"target={target_source_norm_retry}"
+                    )
+            else:
+                # source_idsが指定されていない場合は全件採用
+                filtered_chunks_retry.append((chunk_id, doc, meta))
+        
+        if len(filtered_chunks_retry) == 0:
+            logger.error(
+                f"[QuizRetrieval] 再取得でも指定ソース '{target_source_norm_retry}' に一致するchunkが0件です。"
+>>>>>>> ai-generated
                 f"取得されたchunkのsource分布: {source_counts_retry}"
             )
             break
         
+<<<<<<< HEAD
         ids = [c[0] for c in filtered_chunks]
         documents = [c[1] for c in filtered_chunks]
         metadatas = [c[2] for c in filtered_chunks]
+=======
+        # フィルタ後のchunkを使用
+        ids_retry = [c[0] for c in filtered_chunks_retry]
+        documents_retry = [c[1] for c in filtered_chunks_retry]
+        metadatas_retry = [c[2] for c in filtered_chunks_retry]
+>>>>>>> ai-generated
         
         # chunk_selector で選択
         chunks = [
             {"id": chunk_id, "document": doc, "metadata": meta}
-            for chunk_id, doc, meta in zip(ids, documents, metadatas)
+            for chunk_id, doc, meta in zip(ids_retry, documents_retry, metadatas_retry)
         ]
         
         selected_chunks = select_chunks(chunks, level, select_n * 2)

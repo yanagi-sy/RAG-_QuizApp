@@ -208,6 +208,9 @@ def sample_ids_multi_source(
         
     Returns:
         chunk IDのリスト（最大 n 件）
+        
+    Raises:
+        ValueError: 指定されたsourceがpoolに存在しない場合
     """
     # source一覧を取得
     if sources:
@@ -221,6 +224,7 @@ def sample_ids_multi_source(
         
         # 指定されたsourceのみ（NFC正規化）
         target_sources_norm = [unicodedata.normalize("NFC", s) for s in sources]
+<<<<<<< HEAD
         # poolのキーもNFC正規化して比較
         pool_keys_norm = {unicodedata.normalize("NFC", k): k for k in pool.keys()}
         target_sources = []
@@ -246,6 +250,49 @@ def sample_ids_multi_source(
                 f"指定source: {sources}, poolのキー: {list(pool.keys())[:10]}"
             )
             return []
+=======
+        
+        # poolのキーもNFC正規化して比較（柔軟なマッチング）
+        pool_keys_norm = {unicodedata.normalize("NFC", k): k for k in pool.keys()}
+        target_sources = []
+        unmatched_sources = []
+        
+        for source_norm in target_sources_norm:
+            matched_key = None
+            # 完全一致を試す
+            matched_key = pool_keys_norm.get(source_norm)
+            
+            # 完全一致しない場合、部分一致を試す（ファイル名の表記ゆれ対策）
+            if not matched_key:
+                for pool_key_norm, pool_key in pool_keys_norm.items():
+                    # ファイル名の部分一致を許容（拡張子の有無、スペース等の違いを許容）
+                    if source_norm in pool_key_norm or pool_key_norm in source_norm:
+                        matched_key = pool_key
+                        logger.info(
+                            f"[ChunkPool] source部分一致: specified={source_norm} -> pool_key={pool_key}"
+                        )
+                        break
+            
+            if matched_key:
+                target_sources.append(matched_key)
+            else:
+                unmatched_sources.append(source_norm)
+        
+        # マッチしないsourceがある場合はエラーを返す（空リストを返さない）
+        if len(unmatched_sources) > 0:
+            pool_keys_preview = list(pool.keys())[:10]
+            error_msg = (
+                f"指定されたsourceがpoolに存在しません: {unmatched_sources}, "
+                f"pool_keys={pool_keys_preview}..."
+            )
+            logger.error(f"[ChunkPool] 【重大】{error_msg}")
+            raise ValueError(error_msg)
+        
+        # すべてのsourceがマッチした場合のみ続行
+        if len(target_sources) == 0:
+            logger.error("[ChunkPool] 【重大】マッチしたsourceが0件です")
+            raise ValueError("指定されたsourceがpoolに存在しません")
+>>>>>>> ai-generated
     else:
         # 全source（ただし、単一ソース固定のため通常は使用されない）
         logger.warning(
