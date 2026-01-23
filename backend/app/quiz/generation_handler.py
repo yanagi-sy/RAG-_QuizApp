@@ -308,6 +308,16 @@ async def generate_quizzes_with_retry(
                     f"quote_preview={single_citation.quote[:50] if single_citation.quote else 'N/A'}"
                 )
                 
+                # 【デバッグ】citationのquoteの内容を確認（火災関連キーワードチェック）
+                fire_keywords = ["火災", "避難", "災害", "防犯"]
+                quote_has_fire = any(keyword in single_citation.quote for keyword in fire_keywords) if single_citation.quote else False
+                if quote_has_fire:
+                    logger.info(
+                        f"[GENERATION:DEBUG] citationのquoteに火災関連キーワードを検出: "
+                        f"source={single_citation.source}, quote_preview={single_citation.quote[:100]}..., "
+                        f"fire_keywords={[kw for kw in fire_keywords if kw in single_citation.quote]}"
+                    )
+                
                 # 【品質担保】選択されたcitationのsourceが指定ソースと一致することを確認
                 if expected_source and single_citation.source != expected_source:
                     logger.error(
@@ -410,6 +420,19 @@ async def generate_quizzes_with_retry(
                             # 【デバッグ】重複クイズのsource情報を出力
                             quiz_sources = [c.source for c in selected_quiz.citations] if selected_quiz.citations else []
                             expected_source = request.source_ids[0] if request.source_ids and len(request.source_ids) > 0 else None
+                            
+                            # 【デバッグ】statementに火災関連キーワードが含まれている場合、citationのquoteも確認
+                            fire_keywords = ["火災", "避難", "災害", "防犯"]
+                            statement_has_fire = any(keyword in selected_quiz.statement for keyword in fire_keywords)
+                            if statement_has_fire:
+                                citation_quotes = [c.quote[:100] if c.quote else "N/A" for c in selected_quiz.citations] if selected_quiz.citations else []
+                                logger.error(
+                                    f"[GENERATION:DUPLICATE_FIRE] 重複クイズ（火災関連）を除外: "
+                                    f"statement='{selected_quiz.statement[:50]}...', "
+                                    f"quiz_sources={quiz_sources}, expected_source={expected_source}, "
+                                    f"citation_quotes={citation_quotes}"
+                                )
+                            
                             logger.warning(
                                 f"重複クイズを除外: '{selected_quiz.statement[:50]}...' "
                                 f"(consecutive_duplicates={consecutive_duplicates}/{max_consecutive_duplicates}), "
