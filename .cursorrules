@@ -1,15 +1,13 @@
----
-description: "新人フルスタック開発者向け規約（Git運用 / AI行動ルール / 質問の義務）"
-globs: ["**/*"]
-alwaysApply: true
----
-
 # Cursor Rules - 新人フルスタック開発者向け規約
 
 ## 🎯 このルールの目的
 - 分からないことは放置しない → **質問 → 理解 → 実装**
 - AI生成コードと人間の成果物を**明確に分離**する
 - 進捗は**Gitで見える化**し、作業証跡を残す
+
+## 🖥️ 環境
+- **ターミナル：Git Bash（Windows）**
+- Git Bashはbash互換のため、`&&` や `-m` オプションで日本語が使える
 
 ---
 
@@ -77,6 +75,101 @@ alwaysApply: true
 
 ---
 
+## 1. 命名規則
+
+### 共通ルール
+- **意味のある英語名**をつける（略語・ローマ字禁止）
+- **一貫性**を保つ（プロジェクト内で統一）
+
+### 言語別ルール
+
+| 対象 | TypeScript/JS | Python | C#/Java |
+|------|---------------|--------|---------|
+| ファイル名 | kebab-case | snake_case | PascalCase |
+| 変数 | camelCase | snake_case | camelCase |
+| 関数 | camelCase | snake_case | PascalCase(C#) / camelCase(Java) |
+| クラス | PascalCase | PascalCase | PascalCase |
+| 定数 | UPPER_SNAKE_CASE | UPPER_SNAKE_CASE | UPPER_SNAKE_CASE |
+
+### 共通命名ルール
+
+| 対象 | ルール | 例 |
+|------|--------|-----|
+| DBテーブル | snake_case（複数形） | `users`, `order_items` |
+| APIエンドポイント | kebab-case（複数形） | `/api/users`, `/api/order-items` |
+| 環境変数 | UPPER_SNAKE_CASE | `DATABASE_URL` |
+| Gitブランチ | kebab-case | `feature/user-auth` |
+
+### ❌ NG例
+```
+data, info, temp, hoge, foo  → 意味がない
+flg, btn, msg                → 略しすぎ
+torokuUser, loginKakunin    → ローマ字禁止
+user_Service                 → ケース混在
+```
+
+---
+
+## 2. コメント方針
+
+### 書く場所
+1. **関数の直前** - 目的・引数・戻り値
+2. **複雑なロジック** - なぜ必要か
+3. **正規表現** - パターンの意味
+4. **マジックナンバー** - 数値の意味
+
+### 書き方
+```typescript
+// ✅ GOOD：理由を書く
+// 18歳未満は保護者同意が必要なためエラーを返す
+if (user.age < 18) { ... }
+
+// ❌ BAD：見れば分かることを書かない
+// ageが18より小さいかチェック
+if (user.age < 18) { ... }
+```
+
+### ❌ NGコメント
+- コードを読めば分かる内容
+- コードと矛盾する古いコメント
+- 3行以上の長文
+
+---
+
+## 3. ドキュメント方針
+
+### 作成タイミング
+1. **要件定義書** → プロジェクト開始時（何を作るか）
+2. **基本設計書** → 要件定義後（どう作るか + ディレクトリ構成確定）
+3. **詳細設計書** → 基本設計後（機能ごとに必要な時）
+
+### 配置場所
+```
+docs/
+├── requirements.md      # 要件定義書
+├── basic-design.md      # 基本設計書
+└── detailed-design/     # 詳細設計書（機能別）
+```
+
+### 必須ルール
+- 各項目に「**なぜ必要か**」を新人向けに記載する
+- 最低限の項目でOK、薄くても作る
+
+---
+
+## 4. ディレクトリ構成のルール
+
+### 確定タイミング
+**基本設計書を作成する段階で確定**
+
+### 変更したい場合
+1. 基本設計書の「ディレクトリ構成」を更新
+2. 変更理由を記載
+3. 影響範囲を確認
+4. レビュー/合意を得る
+
+---
+
 ## 5. Git運用
 
 ### ⚠️ プロジェクト開始前（必須）
@@ -85,86 +178,99 @@ alwaysApply: true
 ```
 質問例：
 「GitHubリポジトリのURLを教えてください」
-「進捗管理用のリポジトリはありますか？」
+「このプロジェクトのリモートリポジトリはありますか？」
 ```
 
-→ URLがない場合は、先にリポジトリを作成してもらう
+→ **URLがない場合は開発を開始しない**（先にリポジトリを作成してもらう）
+
+### 既存プロジェクトにCursor Rulesを追加した場合
+**AIは以下を自動で実行すること：**
+1. `git remote -v` でリモート確認
+2. リモートがなければ → ユーザーにURLを聞く
+3. `git fetch origin` でリモートの情報を取得
+4. `ai-generated`ブランチがなければ作成
+
+```bash
+# リモート確認
+git remote -v
+
+# リモートの最新情報を取得
+git fetch origin
+
+# ai-generatedブランチ作成（既存プロジェクト対応）
+git checkout -b ai-generated
+# または既にリモートにある場合
+git checkout -b ai-generated origin/ai-generated
+```
 
 ### ブランチ構成
 ```
-main           # 人間が確認・承認したコード（直接作業禁止）
-ai-generated   # AIで生成したコード（レビュー前）
-feature/xxx    # 機能開発
-fix/xxx        # バグ修正
+main (または master)  # 人間が確認・承認したコード
+ai-generated          # AIで生成したコード（自動プッシュ先）
+feature/xxx           # 機能開発
+fix/xxx               # バグ修正
 ```
 
-### ⚠️ AIがコードを生成する前（必須・自動実行）
+### ⚠️ プッシュ先のルール（重要）
+
+| 実行者 | プッシュ先 | 条件 |
+|--------|-----------|------|
+| **AI（自動）** | `ai-generated` | コード・ドキュメントの追加/修正/変更時は**必ず**プッシュ |
+| **人（依頼）** | `main` または `master` | 人が「プッシュして」と依頼した場合のみ |
+
+### ⚠️ AIが作業する前（必須・自動実行）
 **mainブランチでは作業しない。必ずai-generatedブランチで作業する。**
 
 **AIは以下を自動で実行すること：**
 1. `git branch` で現在のブランチを確認
-2. mainブランチにいる場合 → `git checkout -b ai-generated` でブランチ作成・切り替え
-3. ai-generatedブランチにいることを確認してからコードを生成
+2. main/masterブランチにいる場合 → `ai-generated`に切り替え
+3. ai-generatedブランチにいることを確認してから作業開始
 
 ```bash
 # 1. 現在のブランチを確認
 git branch
 
 # 2. ai-generatedブランチに切り替え（なければ作成）
-git checkout -b ai-generated
-# または既にある場合
-git checkout ai-generated
+git checkout ai-generated 2>/dev/null || git checkout -b ai-generated
 
-# 3. ブランチ確認後、コード生成を開始
+# 3. ブランチ確認後、作業を開始
 ```
 
-→ **この手順をスキップしてコードを生成してはいけない**
+→ **この手順をスキップして作業してはいけない**
 
-### ⚠️ AIがコードを生成した後（必須・自動実行）
-**コード生成が完了したら、AIは以下を自動で実行すること：**
+### ⚠️ AIが作業した後（必須・自動実行）
+**ソースコード・ドキュメントの追加/修正/変更があったら、AIは必ず以下を実行すること：**
 
 ```bash
 # 1. 変更をステージング
 git add .
 
-# 2. コミット（生成した機能を明記）
-git commit -m "feat(ai): ○○機能を生成"
+# 2. コミット
+git commit -m "feat(ai): 機能を生成"
 
-# 3. リモートにプッシュ
+# 3. ai-generatedブランチにプッシュ（必須）
 git push origin ai-generated
 ```
 
-→ **コード生成後、この手順を必ず実行する**
+→ **変更があったら必ずプッシュする（スキップ禁止）**
 
-### 作業開始時（毎回必須）
+### ⚠️ 人がプッシュを依頼した場合
+**「プッシュして」「mainにあげて」等の依頼があった場合のみ、main/masterにプッシュ**
+
 ```bash
-git remote -v        # リモート確認
-git pull origin main # 最新取得
-git branch           # ブランチ確認（mainなら切り替え）
-```
-
-### AI生成コードのフロー（まとめ）
-```bash
-# 【生成前】ai-generatedブランチで作業
-git branch
-git checkout -b ai-generated
-
-# 【生成後】コミット＆プッシュ
-git add .
-git commit -m "feat(ai): ○○機能を生成"
-git push origin ai-generated
-
-# 【人間が確認後】mainへマージ（人間が実行）
+# mainブランチに切り替え
 git checkout main
-git merge ai-generated
-git commit -m "feat: ○○機能を実装（レビュー済み）"
-git push origin main
-```
+# または
+git checkout master
 
-### mainブランチへのコミット条件
-- **人間がレビュー・承認したコードのみ**
-- AIが直接mainにコミット/プッシュしない
-- マージは人間の判断で行う
+# ai-generatedの内容をマージ
+git merge ai-generated
+
+# mainにプッシュ
+git push origin main
+# または
+git push origin master
+```
 
 ### コミットメッセージ
 ```
@@ -183,6 +289,11 @@ feat: ログイン機能を実装
 fix: ユーザー取得時のnullエラーを修正
 feat(ai): 商品一覧APIを生成
 ```
+
+### mainブランチへのコミット条件
+- **人間がレビュー・承認したコードのみ**
+- AIが直接mainにコミット/プッシュしない
+- マージは人間の判断で行う
 
 ---
 
@@ -273,6 +384,39 @@ feat(ai): 商品一覧APIを生成
 
 ---
 
+## 8. 開発の流れ
+
+### 基本的な開発フロー
+```
+1. 要件定義作成
+    ↓
+2. 基本設計・詳細設計作成
+   （ディレクトリ構成、ファイル行数制限を設定）
+    ↓
+3. 環境構築
+    ↓
+4. フロントエンド開発（単体で動作確認）
+    ↓
+5. バックエンド開発（単体で動作確認）
+    ↓
+6. 結合・テスト
+    ↓
+7. レビュー
+    ↓
+8. 納品
+```
+
+### 開発前の確認（必須）
+**要件定義書・基本設計書を確認し、ソースコードとのズレがないようにする**
+
+### フロントエンド/バックエンドの分離
+- **分けて開発**する
+- **それぞれで動作テスト**できるようにする
+- フロントエンド：モックデータで動作確認
+- バックエンド：Postman/curl等でAPI単体確認
+
+---
+
 ## 📋 毎日のチェックリスト
 
 ### 作業開始時
@@ -281,6 +425,8 @@ feat(ai): 商品一覧APIを生成
 - [ ] 今日やることを把握
 
 ### コード生成前
+- [ ] 要件定義書を確認したか？
+- [ ] 基本設計書を確認したか？
 - [ ] 目的を理解したか？
 - [ ] 入力/出力は明確か？
 - [ ] 不明点は質問したか？

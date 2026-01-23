@@ -57,10 +57,19 @@ def retrieve_for_quiz(
         logger.error("[QuizRetrieval] chunk pool が空です")
         return ([], {"error": "chunk pool が空です"})
     
-    # source_ids を NFC 正規化
-    if source_ids:
-        source_ids = [unicodedata.normalize("NFC", s) for s in source_ids]
-        logger.info(f"[QuizRetrieval] source_ids を NFC 正規化: {source_ids}")
+    # 【品質担保】source_idsは必ず1件が指定されている前提（routerで検証済み）
+    if source_ids is None or len(source_ids) == 0:
+        logger.error("[QuizRetrieval] source_idsが未指定です（routerで検証済みのため通常発生しません）")
+        return ([], {"error": "source_idsが未指定です"})
+    
+    if len(source_ids) >= 2:
+        logger.error(f"[QuizRetrieval] source_idsが複数指定されています（{len(source_ids)}件、routerで検証済みのため通常発生しません）")
+        return ([], {"error": f"source_idsは1件のみ指定可能です（{len(source_ids)}件指定されています）"})
+    
+    # source_ids を NFC 正規化（1件のみ）
+    source_ids = [unicodedata.normalize("NFC", source_ids[0])]
+    target_source = source_ids[0]
+    logger.info(f"[QuizRetrieval] 単一ソース指定: source={target_source}")
     
     # サンプル数を決定（settings から取得）
     sample_n = max(count * settings.quiz_sample_multiplier, settings.quiz_sample_min_n)
@@ -68,19 +77,15 @@ def retrieve_for_quiz(
     # 最低引用数（settings から取得）
     cit_min = settings.quiz_citations_min
     
-    # IDをサンプリング
-    if source_ids:
-        # 指定sourceから均等にサンプル
-        sampled_ids = sample_ids_multi_source(pool, source_ids, sample_n)
-    else:
-        # 全sourceから均等にサンプル
-        sampled_ids = sample_ids_multi_source(pool, None, sample_n)
+    # 【品質担保】指定sourceのみからサンプル（他ソースは除外）
+    sampled_ids = sample_ids_multi_source(pool, source_ids, sample_n)
     
+    # フィルタ後0件なら「根拠不足」で終了（他ソースへフォールバックしない）
     if len(sampled_ids) == 0:
-        logger.error("[QuizRetrieval] サンプルIDが0件です")
-        return ([], {"error": "サンプルIDが0件です", "quiz_pool_sources": list(pool.keys())})
+        logger.error(f"[QuizRetrieval] 指定ソース '{target_source}' からサンプルIDが0件です（根拠不足）")
+        return ([], {"error": f"指定ソース '{target_source}' から根拠が見つかりませんでした"})
     
-    logger.info(f"[QuizRetrieval] {len(sampled_ids)}件のIDをサンプル")
+    logger.info(f"[QuizRetrieval] {len(sampled_ids)}件のIDをサンプル（source={target_source}）")
     
     # chunkを取得
     try:
@@ -97,10 +102,27 @@ def retrieve_for_quiz(
     metadatas = results.get("metadatas", [])
     
     if len(documents) == 0:
-        logger.error("[QuizRetrieval] chunkが0件です")
-        return ([], {"error": "chunkが0件です"})
+        logger.error(f"[QuizRetrieval] chunkが0件です（source={target_source}）")
+        return ([], {"error": f"指定ソース '{target_source}' からchunkが0件です（根拠不足）"})
     
-    logger.info(f"[QuizRetrieval] {len(documents)}件のchunkを取得")
+    # 【品質担保】指定source以外のchunkを除外
+    filtered_chunks = []
+    for chunk_id, doc, meta in zip(ids, documents, metadatas):
+        chunk_source = meta.get("source", "unknown")
+        if chunk_source == target_source:
+            filtered_chunks.append((chunk_id, doc, meta))
+        else:
+            logger.debug(f"[QuizRetrieval] ソース不一致のchunkを除外: source={chunk_source} (target={target_source})")
+    
+    if len(filtered_chunks) == 0:
+        logger.error(f"[QuizRetrieval] 指定ソース '{target_source}' に一致するchunkが0件です（根拠不足）")
+        return ([], {"error": f"指定ソース '{target_source}' に一致するchunkが0件です（根拠不足）"})
+    
+    ids = [c[0] for c in filtered_chunks]
+    documents = [c[1] for c in filtered_chunks]
+    metadatas = [c[2] for c in filtered_chunks]
+    
+    logger.info(f"[QuizRetrieval] {len(documents)}件のchunkを取得（source={target_source}、フィルタ後）")
     
     # chunk_selector で levelに合う chunk を選択
     # まずは cit_min * 2 件選択（余裕を持たせる）
@@ -153,15 +175,12 @@ def retrieve_for_quiz(
         retry_count += 1
         logger.warning(f"[QuizRetrieval] citations不足({len(citations)}件 < {cit_min}), 再取得{retry_count}回目")
         
-        # sample_n を増やして再サンプル
+        # sample_n を増やして再サンプル（指定sourceのみ）
         sample_n = sample_n * 2
-        
-        if source_ids:
-            sampled_ids = sample_ids_multi_source(pool, source_ids, sample_n)
-        else:
-            sampled_ids = sample_ids_multi_source(pool, None, sample_n)
+        sampled_ids = sample_ids_multi_source(pool, source_ids, sample_n)
         
         if len(sampled_ids) == 0:
+            logger.error(f"[QuizRetrieval] 再取得でもサンプルIDが0件です（source={target_source}）")
             break
         
         # chunk取得
@@ -180,6 +199,21 @@ def retrieve_for_quiz(
         
         if len(documents) == 0:
             break
+        
+        # 【品質担保】指定source以外のchunkを除外
+        filtered_chunks = []
+        for chunk_id, doc, meta in zip(ids, documents, metadatas):
+            chunk_source = meta.get("source", "unknown")
+            if chunk_source == target_source:
+                filtered_chunks.append((chunk_id, doc, meta))
+        
+        if len(filtered_chunks) == 0:
+            logger.error(f"[QuizRetrieval] 再取得でも指定ソース '{target_source}' に一致するchunkが0件です")
+            break
+        
+        ids = [c[0] for c in filtered_chunks]
+        documents = [c[1] for c in filtered_chunks]
+        metadatas = [c[2] for c in filtered_chunks]
         
         # chunk_selector で選択
         chunks = [

@@ -67,12 +67,27 @@ async def generate_quizzes_endpoint(request: QuizGenerateRequest) -> QuizGenerat
     検索ではなく「教材からサンプリングして出題」する。
     全資料 / 任意の単独資料 / 全難易度で必ず count 件生成できる。
     
+    **品質担保のため、source_idsは必ず1件を指定してください。**
+    
     Args:
         request: クイズ生成リクエスト
         
     Returns:
         生成されたクイズのリスト
     """
+    # 【品質担保】source_idsの検証：必ず1件を要求
+    if request.source_ids is None or len(request.source_ids) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="source_idsは必須です。単一ソースを1件指定してください。"
+        )
+    
+    if len(request.source_ids) >= 2:
+        raise HTTPException(
+            status_code=400,
+            detail=f"source_idsは1件のみ指定可能です。複数ソース（{len(request.source_ids)}件）は許可されません。"
+        )
+    
     # タイミング計測開始
     t_start = time.perf_counter()
     
@@ -81,7 +96,7 @@ async def generate_quizzes_endpoint(request: QuizGenerateRequest) -> QuizGenerat
     
     logger.info(
         f"[QUIZ_GENERATE:START] request_id={request_id}, "
-        f"level={request.level}, count={request.count}, save={request.save}"
+        f"level={request.level}, count={request.count}, source_ids={request.source_ids}, save={request.save}"
     )
     
     # クイズ専用の候補取得（サンプリング方式、タイミング計測付き）

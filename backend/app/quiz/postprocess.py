@@ -37,6 +37,13 @@ def postprocess_quiz_item(quiz: QuizItemSchema) -> QuizItemSchema:
     # 前後の空白を削除
     statement = statement.strip()
     
+    # 【品質担保】statementは「。」で終わることを強制（必要なら追加）
+    if statement and not statement.endswith("。"):
+        # 「?」「？」は既にvalidatorでreject済み
+        # 「。」がない場合は追加
+        statement = statement + "。"
+        logger.debug(f"[POSTPROCESS] statementに「。」を追加: {statement[:50]}...")
+    
     # explanationはそのまま（LLMで生成済み）
     explanation = quiz.explanation
     

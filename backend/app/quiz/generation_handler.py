@@ -332,31 +332,38 @@ async def generate_quizzes_with_retry(
                         # 重複がなかった場合はリセット
                         consecutive_duplicates = 0
                         
-                        # 【重要】citationsを必ず付与（LLM出力に依存しない）
-                        if not selected_quiz.citations or len(selected_quiz.citations) == 0:
-                            if corresponding_citation:
-                                selected_quiz = selected_quiz.model_copy(update={"citations": [corresponding_citation]})
-                                logger.info(
-                                    f"[GENERATION:CITATION_ASSIGNED] quizにcitationsがなかったため、selected_citationを付与: "
-                                    f"source={corresponding_citation.source}, page={corresponding_citation.page}"
+                        # 【品質担保】citationsはLLM出力を無視し、生成に使ったsingle_citationを必ず付与
+                        # quiz.citationsは最低1件保証（single_citation）
+                        # 同一sourceで最大2件まで追加は任意
+                        if corresponding_citation:
+                            # LLM出力のcitationsを無視し、single_citationを先頭に配置
+                            # 同一sourceのcitationsを最大2件まで追加（single_citation + 追加1件）
+                            llm_citations = selected_quiz.citations if selected_quiz.citations else []
+                            
+                            # 同一sourceのcitationsを抽出（single_citation以外）
+                            same_source_citations = [
+                                c for c in llm_citations
+                                if c.source == corresponding_citation.source
+                                and not (
+                                    c.source == corresponding_citation.source
+                                    and c.page == corresponding_citation.page
+                                    and (c.quote[:60] if c.quote else "") == (corresponding_citation.quote[:60] if corresponding_citation.quote else "")
                                 )
+                            ]
+                            
+                            # single_citationを先頭に配置し、同一sourceのcitationsを最大1件追加（合計最大2件）
+                            final_citations = [corresponding_citation]
+                            if len(same_source_citations) > 0:
+                                final_citations.append(same_source_citations[0])
+                            
+                            selected_quiz = selected_quiz.model_copy(update={"citations": final_citations})
+                            logger.info(
+                                f"[GENERATION:CITATION_ASSIGNED] single_citationを必ず付与（LLM出力無視）: "
+                                f"source={corresponding_citation.source}, page={corresponding_citation.page}, "
+                                f"final_citations_count={len(final_citations)}"
+                            )
                         else:
-                            # citationsが既にある場合でも、selected_citationが含まれているか確認
-                            if corresponding_citation:
-                                citation_sources = [c.source for c in selected_quiz.citations]
-                                if corresponding_citation.source not in citation_sources:
-                                    updated_citations = [corresponding_citation] + selected_quiz.citations
-                                    selected_quiz = selected_quiz.model_copy(update={"citations": updated_citations})
-                                    logger.info(
-                                        f"[GENERATION:CITATION_PREPENDED] selected_citationを先頭に追加: "
-                                        f"source={corresponding_citation.source}, page={corresponding_citation.page}, "
-                                        f"final_citations_count={len(updated_citations)}"
-                                    )
-                                else:
-                                    logger.info(
-                                        f"[GENERATION:CITATION_VERIFIED] selected_citationが既に含まれています: "
-                                        f"source={corresponding_citation.source}, final_citations_count={len(selected_quiz.citations)}"
-                                    )
+                            logger.warning(f"[GENERATION:CITATION_MISSING] corresponding_citationが見つかりません（citation_idx={citation_idx}）")
                         
                         # 採用
                         batch_quizzes.append((selected_quiz, single_citation))

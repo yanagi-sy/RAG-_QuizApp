@@ -39,6 +39,23 @@ UNNATURAL_PATTERNS = [
     (r"^(この|その|それ)\s*[はがを]|^[はがを]\s*(この|その|それ)", "expression_ambiguous_reference"),
 ]
 
+# 禁止表現パターン（クイズ文体を強制：断言文のみ許可）
+# 「ください/お願いします/〜しないでください/〜してください/？/しましょう」等を禁止
+FORBIDDEN_PHRASES = [
+    "ください",
+    "お願いします",
+    "お願いいたします",
+    "しないでください",
+    "してください",
+    "しましょう",
+    "しましょうか",
+    "して下さい",
+    "して下さい。",
+    "お願い",
+    "？",  # 全角疑問符
+    "?",   # 半角疑問符
+]
+
 
 def validate_quiz_item(item: dict) -> tuple[bool, str]:
     """
@@ -80,6 +97,18 @@ def validate_quiz_item(item: dict) -> tuple[bool, str]:
     
     if statement.endswith("でしょうか") or statement.endswith("ですか"):
         return (False, "question_form_ending")
+    
+    # 【品質担保】禁止表現チェック（クイズ文体を強制：断言文のみ許可）
+    for phrase in FORBIDDEN_PHRASES:
+        if phrase in statement:
+            return (False, f"forbidden_phrase:{phrase}")
+    
+    # 【品質担保】statementは「。」で終わることを強制（必要なら整形）
+    statement_stripped = statement.strip()
+    if not statement_stripped.endswith("。"):
+        # 「。」で終わっていない場合は追加（ただし、既に「?」「？」でreject済み）
+        # ここでは「。」がない場合のみreject（整形は後処理で行う）
+        return (False, "missing_period_end")
     
     # 曖昧表現チェック（○×として判定不能）
     for phrase in AMBIGUOUS_PHRASES:
