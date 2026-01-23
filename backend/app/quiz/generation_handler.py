@@ -5,6 +5,7 @@ generate_and_validate_quizzes を呼び出して、複数回試行する。
 """
 import logging
 import re
+import unicodedata
 from typing import Dict, Any
 
 from app.schemas.quiz import QuizGenerateRequest, QuizItem as QuizItemSchema
@@ -300,7 +301,13 @@ async def generate_quizzes_with_retry(
             for citation_idx, single_citation in enumerate(selected_citations_list):
                 # debugログ: selected_citationを出力
                 expected_source = request.source_ids[0] if request.source_ids and len(request.source_ids) > 0 else None
-                source_match = "✅" if single_citation.source == expected_source else "❌"
+                # Unicode正規化して比較（NFC正規化）
+                if expected_source:
+                    expected_source_norm = unicodedata.normalize("NFC", expected_source)
+                    actual_source_norm = unicodedata.normalize("NFC", single_citation.source)
+                    source_match = "✅" if actual_source_norm == expected_source_norm else "❌"
+                else:
+                    source_match = "❓"
                 logger.info(
                     f"[GENERATION:SELECTED_CITATION] citation_idx={citation_idx}, "
                     f"source={single_citation.source} {source_match}, "
@@ -309,14 +316,19 @@ async def generate_quizzes_with_retry(
                 )
                 
                 # 【品質担保】選択されたcitationのsourceが指定ソースと一致することを確認
-                if expected_source and single_citation.source != expected_source:
-                    logger.error(
-                        f"[GENERATION:SOURCE_MISMATCH] 選択されたcitationのsourceが不一致: "
-                        f"expected={expected_source}, actual={single_citation.source}, "
-                        f"quote_preview={single_citation.quote[:50] if single_citation.quote else 'N/A'}"
-                    )
-                    # このcitationをスキップ
-                    continue
+                if expected_source:
+                    # Unicode正規化して比較（NFC正規化）
+                    expected_source_norm = unicodedata.normalize("NFC", expected_source)
+                    actual_source_norm = unicodedata.normalize("NFC", single_citation.source)
+                    if actual_source_norm != expected_source_norm:
+                        logger.error(
+                            f"[GENERATION:SOURCE_MISMATCH] 選択されたcitationのsourceが不一致: "
+                            f"expected={expected_source} (norm={expected_source_norm}), "
+                            f"actual={single_citation.source} (norm={actual_source_norm}), "
+                            f"quote_preview={single_citation.quote[:50] if single_citation.quote else 'N/A'}"
+                        )
+                        # このcitationをスキップ
+                        continue
                 
                 # 1つのcitationから1問（○のみ）を生成
                 task = generate_and_validate_quizzes(
@@ -330,14 +342,19 @@ async def generate_quizzes_with_retry(
                 )
                 # 【品質担保】選択されたcitationのsourceが指定ソースと一致することを確認（事前チェック）
                 expected_source = request.source_ids[0] if request.source_ids and len(request.source_ids) > 0 else None
-                if expected_source and single_citation.source != expected_source:
-                    logger.error(
-                        f"[GENERATION:SOURCE_MISMATCH] 選択されたcitationのsourceが不一致（事前チェック）: "
-                        f"expected={expected_source}, actual={single_citation.source}, "
-                        f"quote_preview={single_citation.quote[:50] if single_citation.quote else 'N/A'}"
-                    )
-                    # このcitationをスキップ（タスクに追加しない）
-                    continue
+                if expected_source:
+                    # Unicode正規化して比較（NFC正規化）
+                    expected_source_norm = unicodedata.normalize("NFC", expected_source)
+                    actual_source_norm = unicodedata.normalize("NFC", single_citation.source)
+                    if actual_source_norm != expected_source_norm:
+                        logger.error(
+                            f"[GENERATION:SOURCE_MISMATCH] 選択されたcitationのsourceが不一致（事前チェック）: "
+                            f"expected={expected_source} (norm={expected_source_norm}), "
+                            f"actual={single_citation.source} (norm={actual_source_norm}), "
+                            f"quote_preview={single_citation.quote[:50] if single_citation.quote else 'N/A'}"
+                        )
+                        # このcitationをスキップ（タスクに追加しない）
+                        continue
                 
                 generation_tasks.append((task, single_citation, citation_idx))
             
@@ -377,17 +394,22 @@ async def generate_quizzes_with_retry(
                         if corresponding_citation and corresponding_citation.source:
                             # request.source_idsが1件であることはrouterで保証済み
                             expected_source = request.source_ids[0] if request.source_ids and len(request.source_ids) > 0 else None
-                            if expected_source and corresponding_citation.source != expected_source:
-                                logger.error(
-                                    f"[GENERATION:SOURCE_MISMATCH] citationのsourceが不一致: "
-                                    f"expected={expected_source}, actual={corresponding_citation.source}, "
-                                    f"quiz_statement={selected_quiz.statement[:50]}"
-                                )
-                                all_rejected_items.append({
-                                    "statement": selected_quiz.statement[:100],
-                                    "reason": "source_mismatch",
-                                })
-                                continue
+                            if expected_source:
+                                # Unicode正規化して比較（NFC正規化）
+                                expected_source_norm = unicodedata.normalize("NFC", expected_source)
+                                actual_source_norm = unicodedata.normalize("NFC", corresponding_citation.source)
+                                if actual_source_norm != expected_source_norm:
+                                    logger.error(
+                                        f"[GENERATION:SOURCE_MISMATCH] citationのsourceが不一致: "
+                                        f"expected={expected_source} (norm={expected_source_norm}), "
+                                        f"actual={corresponding_citation.source} (norm={actual_source_norm}), "
+                                        f"quiz_statement={selected_quiz.statement[:50]}"
+                                    )
+                                    all_rejected_items.append({
+                                        "statement": selected_quiz.statement[:100],
+                                        "reason": "source_mismatch",
+                                    })
+                                    continue
                         
                         # statementの重複チェック
                         if _is_duplicate(selected_quiz.statement, accepted_statements):

@@ -379,10 +379,13 @@ def retrieve_for_quiz(
         )
     elif len(final_citation_sources) == 1:
         actual_source = list(final_citation_sources.keys())[0]
-        if actual_source != target_source:
+        # Unicode正規化して比較（NFC正規化）
+        actual_source_norm = unicodedata.normalize("NFC", actual_source)
+        target_source_norm = unicodedata.normalize("NFC", target_source)
+        if actual_source_norm != target_source_norm:
             logger.error(
                 f"[QuizRetrieval] 重大: citationsのsourceが指定ソースと一致しません: "
-                f"actual={actual_source}, expected={target_source}"
+                f"actual={actual_source} (norm={actual_source_norm}), expected={target_source} (norm={target_source_norm})"
             )
     
     # debug情報を構築
