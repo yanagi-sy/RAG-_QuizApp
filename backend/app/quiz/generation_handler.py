@@ -256,11 +256,39 @@ async def generate_quizzes_with_retry(
                 available_citations = citations
                 consecutive_duplicates = 0  # リセット時に連続重複もリセット
             
-            # 使用可能なcitationsからランダムに選択（多様性を確保）
+            # 使用可能なcitationsから選択（多様性を確保、出題箇所の重複を避ける）
             import random
+            # 【改善】出題箇所の重複を避けるため、より多様なcitationsを選択
+            # 使用済みcitationsと異なるquoteを持つcitationsを優先的に選択
             if len(available_citations) > 5:
-                # 5件以上ある場合は、ランダムに5件選択
-                selected_citations = random.sample(available_citations, 5)
+                # 使用済みcitationsのquote先頭60文字を取得
+                used_quote_prefixes = {
+                    quote[:60] if quote else ""
+                    for _, _, quote in used_citation_keys
+                }
+                
+                # 使用済みquoteと異なるcitationsを優先的に選択
+                diverse_citations = [
+                    c for c in available_citations
+                    if (c.quote[:60] if c.quote else "") not in used_quote_prefixes
+                ]
+                
+                if len(diverse_citations) >= 5:
+                    # 多様なcitationsが5件以上ある場合は、そこからランダムに5件選択
+                    selected_citations = random.sample(diverse_citations, 5)
+                elif len(diverse_citations) > 0:
+                    # 多様なcitationsが1-4件の場合は、それに加えて残りを補完
+                    remaining_needed = 5 - len(diverse_citations)
+                    remaining_citations = [
+                        c for c in available_citations
+                        if c not in diverse_citations
+                    ]
+                    selected_citations = diverse_citations + random.sample(
+                        remaining_citations, min(remaining_needed, len(remaining_citations))
+                    )
+                else:
+                    # 多様なcitationsがない場合は、ランダムに5件選択
+                    selected_citations = random.sample(available_citations, 5)
             else:
                 selected_citations = available_citations
             

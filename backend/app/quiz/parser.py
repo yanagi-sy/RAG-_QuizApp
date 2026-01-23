@@ -243,8 +243,18 @@ def _parse_single_quiz(
         logger.info(f"クイズ {index} に false_statement が含まれています: {false_stmt_preview}...")
     
     # type のデフォルト値設定（○×固定）
+    # 【修正】LLMがテンプレート名（T3、T6など）をtypeに入れてしまう場合があるため、チェックして修正
     if "type" not in quiz_data:
         quiz_data["type"] = "true_false"
+    else:
+        # typeがテンプレート名（T3、T6など）の場合は修正
+        type_value = quiz_data.get("type", "")
+        if isinstance(type_value, str) and type_value.startswith("T") and type_value[1:].isdigit():
+            logger.warning(f"クイズ {index} のtypeがテンプレート名（{type_value}）になっています。'true_false'に修正します。")
+            quiz_data["type"] = "true_false"
+        elif type_value not in ["true_false", "mcq"]:
+            logger.warning(f"クイズ {index} のtypeが不正な値（{type_value}）です。'true_false'に修正します。")
+            quiz_data["type"] = "true_false"
     
     # Citationをパース（LLMが返した場合）
     if "citations" in quiz_data and isinstance(quiz_data["citations"], list):
