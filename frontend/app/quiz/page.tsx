@@ -40,7 +40,7 @@ export default function QuizPage() {
 
   // クイズ生成用の状態
   const [sources, setSources] = useState<string[]>([]);
-  const [selectedSources, setSelectedSources] = useState<string[]>([]);
+  const [selectedSource, setSelectedSource] = useState<string | null>(null);
   const [level, setLevel] = useState<Level>("beginner");
   const [loadingGenerate, setLoadingGenerate] = useState(false);
   const [loadingSources, setLoadingSources] = useState(true);
@@ -97,13 +97,24 @@ export default function QuizPage() {
 
   // クイズ生成
   const handleGenerate = async () => {
+    // 【品質担保】単一ソースが選択されていることを確認
+    if (!selectedSource) {
+      setGenerateError(
+        new ApiError(
+          "INVALID_INPUT",
+          "ファイルを1件選択してください。"
+        )
+      );
+      return;
+    }
+
     setLoadingGenerate(true);
     setGenerateError(null);
 
     try {
       const result = await generateQuizSet(
         level,
-        selectedSources.length > 0 ? selectedSources : undefined
+        [selectedSource] // 単一ソースを配列で渡す
       );
 
       if (result.quizzes && result.quizzes.length > 0) {
@@ -137,22 +148,9 @@ export default function QuizPage() {
     }
   };
 
-  // ソース選択のトグル
-  const toggleSource = (source: string) => {
-    setSelectedSources((prev) =>
-      prev.includes(source)
-        ? prev.filter((s) => s !== source)
-        : [...prev, source]
-    );
-  };
-
-  // 全選択/全解除
-  const toggleAllSources = () => {
-    if (selectedSources.length === sources.length) {
-      setSelectedSources([]);
-    } else {
-      setSelectedSources([...sources]);
-    }
+  // ソース選択（単一選択）
+  const selectSource = (source: string) => {
+    setSelectedSource(source);
   };
 
   // クイズセットの詳細を取得
@@ -264,7 +262,7 @@ export default function QuizPage() {
             {/* ファイル選択 */}
             <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-4 sm:p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                ファイル選択
+                ファイル選択（必須）
               </h2>
               {loadingSources ? (
                 <div className="text-sm text-gray-500">読み込み中...</div>
@@ -274,38 +272,32 @@ export default function QuizPage() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-700">
-                      {selectedSources.length} / {sources.length} 件選択中
-                    </span>
-                    <button
-                      onClick={toggleAllSources}
-                      className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                    >
-                      {selectedSources.length === sources.length
-                        ? "全解除"
-                        : "全選択"}
-                    </button>
+                  <div className="text-sm text-gray-700">
+                    1件のファイルを選択してください
                   </div>
                   <div className="space-y-2 max-h-64 overflow-y-auto">
                     {sources.map((source) => (
                       <label
                         key={source}
-                        className="flex items-center space-x-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer"
+                        className="flex items-center space-x-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer border border-transparent hover:border-gray-200 transition-colors"
                       >
                         <input
-                          type="checkbox"
-                          checked={selectedSources.includes(source)}
-                          onChange={() => toggleSource(source)}
-                          className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                          type="radio"
+                          name="source"
+                          value={source}
+                          checked={selectedSource === source}
+                          onChange={() => selectSource(source)}
+                          className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
                         />
                         <span className="text-sm text-gray-900">{source}</span>
                       </label>
                     ))}
                   </div>
-                  <p className="text-xs text-gray-500">
-                    ※ 未選択の場合は全ファイルから生成します
-                  </p>
+                  {!selectedSource && (
+                    <p className="text-xs text-red-600">
+                      ※ ファイルを1件選択してください
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -349,7 +341,7 @@ export default function QuizPage() {
             <div className="flex justify-end">
               <button
                 onClick={handleGenerate}
-                disabled={loadingGenerate || loadingSources}
+                disabled={loadingGenerate || loadingSources || !selectedSource}
                 className="h-12 min-w-[140px] rounded-xl bg-blue-600 px-6 text-base font-medium text-white hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
               >
                 {loadingGenerate ? "生成中..." : "生成"}
