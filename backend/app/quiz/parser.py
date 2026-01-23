@@ -255,6 +255,36 @@ def _parse_single_quiz(
         
         # まず確定citation（fallback_citations[0]）を追加
         primary_citation = fallback_citations[0]
+        
+        # 【品質担保】citationのsourceとquoteの内容が一致しているか確認
+        # 火災関連のキーワードが含まれている場合、sourceがsample3.txtでないことを確認
+        fire_keywords = ["火災", "避難", "災害", "防犯"]
+        has_fire_content = any(keyword in primary_citation.quote for keyword in fire_keywords)
+        
+        if has_fire_content and "sample3.txt" in primary_citation.source:
+            logger.error(
+                f"[PARSE] 【重大】citationのsourceと内容の不一致を検出: "
+                f"source={primary_citation.source}, quote_preview={primary_citation.quote[:100]}..., "
+                f"fire_keywords={[kw for kw in fire_keywords if kw in primary_citation.quote]}, "
+                f"index={index}"
+            )
+            # このcitationは除外する（誤ったsourceの可能性がある）
+            # ただし、fallback_citationsが空になる場合はエラーを返す
+            if len(fallback_citations) > 1:
+                logger.warning(
+                    f"[PARSE] 不一致citationをスキップし、次のcitationを使用します（index={index}）"
+                )
+                fallback_citations = fallback_citations[1:]
+                primary_citation = fallback_citations[0]
+            else:
+                logger.error(
+                    f"[PARSE] 【重大】不一致citationを除外するとfallback_citationsが空になります（index={index}）。"
+                    f"このcitationは使用しませんが、エラーが発生する可能性があります。"
+                )
+                # この場合、citationを空にしてエラーを返す
+                quiz_data["citations"] = []
+                return None
+        
         final_citations.append(primary_citation)
         
         # LLMが返したcitationsがある場合、同一sourceのもののみを最大1件追加
