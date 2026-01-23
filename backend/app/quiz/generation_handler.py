@@ -318,6 +318,21 @@ async def generate_quizzes_with_retry(
                     # このcitationをスキップ
                     continue
                 
+                # 【品質担保】citationのsourceとquoteの内容が一致しているか確認
+                # 火災関連のキーワードが含まれている場合、sourceがsample*.txtでないことを確認
+                fire_keywords = ["火災", "避難", "災害", "防犯"]
+                has_fire_content = any(keyword in single_citation.quote for keyword in fire_keywords)
+                
+                # sample*.txtファイルに火災関連の内容が含まれている場合は不一致として検出
+                if has_fire_content and single_citation.source.startswith("sample") and single_citation.source.endswith(".txt"):
+                    logger.error(
+                        f"[GENERATION:CONTENT_MISMATCH] 【重大】選択されたcitationのsourceと内容の不一致を検出: "
+                        f"source={single_citation.source}, quote_preview={single_citation.quote[:100]}..., "
+                        f"fire_keywords={[kw for kw in fire_keywords if kw in single_citation.quote]}"
+                    )
+                    # このcitationをスキップ
+                    continue
+                
                 # 1つのcitationから1問（○のみ）を生成
                 task = generate_and_validate_quizzes(
                     level=request.level,
