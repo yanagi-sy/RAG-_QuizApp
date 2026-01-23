@@ -33,9 +33,52 @@ def _normalize_statement(statement: str) -> str:
     return normalized.lower()
 
 
+def _get_core_content_key(statement: str) -> str:
+    """
+    コア内容キーを取得（否定語除去後の正規化）
+    
+    重複判定用に、否定語（しない/行わない/禁止/不要/ではない等）を除去した
+    コア内容のみで比較する。これにより「行う/行わない」の単純反転が
+    同一セットに混入しないようにする。
+    
+    Args:
+        statement: クイズのstatement
+        
+    Returns:
+        コア内容キー（否定語除去後の正規化）
+    """
+    # 否定語パターン（優先度順）
+    negation_patterns = [
+        r'しない',
+        r'行わない',
+        r'ではない',
+        r'なくてもよい',
+        r'禁止',
+        r'不要',
+        r'してはいけない',
+        r'行ってはいけない',
+        r'してはならない',
+        r'行ってはならない',
+    ]
+    
+    # 否定語を除去
+    core = statement
+    for pattern in negation_patterns:
+        core = re.sub(pattern, '', core)
+    
+    # 正規化（空白除去、句読点除去、小文字化）
+    normalized = re.sub(r'\s+', '', core)
+    normalized = normalized.replace('。', '').replace('、', '').replace('.', '').replace(',', '')
+    return normalized.lower()
+
+
 def _is_duplicate(new_statement: str, existing_statements: list[str]) -> bool:
     """
     新しいstatementが既存のものと重複しているかチェック
+    
+    重複判定は2段階で行う:
+    1. 通常の正規化（空白・句読点除去）で完全一致チェック
+    2. コア内容キー（否定語除去後）で一致チェック（「行う/行わない」の単純反転を検出）
     
     Args:
         new_statement: 新しいstatement
@@ -44,11 +87,48 @@ def _is_duplicate(new_statement: str, existing_statements: list[str]) -> bool:
     Returns:
         True: 重複している、False: 重複していない
     """
+    # 1. 通常の正規化で完全一致チェック
     normalized_new = _normalize_statement(new_statement)
     for existing in existing_statements:
         normalized_existing = _normalize_statement(existing)
         if normalized_new == normalized_existing:
-            logger.info(f"重複検出: '{new_statement[:50]}...' と '{existing[:50]}...' が重複しています")
+            logger.info(f"重複検出（完全一致）: '{new_statement[:50]}...' と '{existing[:50]}...' が重複しています")
+            return True
+    
+    # 2. コア内容キー（否定語除去後）で一致チェック
+    core_key_new = _get_core_content_key(new_statement)
+    for existing in existing_statements:
+        core_key_existing = _get_core_content_key(existing)
+        if core_key_new == core_key_existing and core_key_new:  # 空文字列は除外
+            logger.info(f"重複検出（コア内容一致）: '{new_statement[:50]}...' と '{existing[:50]}...' がコア内容で重複しています")
+            return True
+    
+    return False
+
+
+def _is_citation_duplicate(quiz_citations: list[Citation], used_citation_keys: set) -> bool:
+    """
+    クイズのcitationsが既に使用済みかチェック
+    
+    Args:
+        quiz_citations: クイズのcitationsリスト
+        used_citation_keys: 使用済みcitationキーのセット
+        
+    Returns:
+        True: 重複している（既に使用済みのcitationを含む）、False: 重複していない
+    """
+    for citation in quiz_citations:
+        citation_key = (
+            citation.source,
+            citation.page,
+            citation.quote[:60] if citation.quote else ""
+        )
+        if citation_key in used_citation_keys:
+            # TypeError対策: pageを文字列に変換
+            page_str = str(citation.page) if citation.page is not None else "None"
+            logger.info(
+                f"出題箇所重複検出: '{citation.source}' (p.{page_str}) は既に使用済みです"
+            )
             return True
     return False
 
@@ -100,6 +180,10 @@ async def generate_quizzes_with_retry(
     # 重複対策: 使用済みcitationsを記録（同じcitationから同じクイズが生成されるのを防ぐ）
     used_citation_keys = set()
     
+    # banned_statements: 既出・重複で落としたstatementを保持（retry時にLLMに渡す）
+    banned_statements = []
+    banned_statements_max = 30  # 上限（長くなりすぎないように）
+    
     logger.info(
         f"[GENERATION_RETRY] 開始: target={target_count}, max_attempts={max_attempts} "
         f"(base={base_max_attempts}, calculated={calculated_max_attempts})"
@@ -124,11 +208,24 @@ async def generate_quizzes_with_retry(
                 if (c.source, c.page, c.quote[:60] if c.quote else "") not in used_citation_keys
             ]
             
-            # 使用可能なcitationsが少ない場合は、使用済みをリセット
-            if len(available_citations) < 3:
-                logger.info(f"[GENERATION_RETRY] 使用可能なcitationsが少ないため、使用済みリストをリセット")
+            # 使用可能なcitationsが少ない場合、または連続重複が多すぎる場合は、使用済みをリセット
+            # 重複が多すぎて規定数に達しない問題を解決するため、より積極的にリセット
+            should_reset = (
+                len(available_citations) < 3 or  # 3件未満の場合（より積極的にリセット）
+                consecutive_duplicates >= 3 or  # 連続3回重複した場合（より積極的にリセット）
+                (attempts > 2 and len(accepted_quizzes) == 0) or  # 2回以上試行しても1件も採用されていない場合
+                (attempts > 5 and len(accepted_quizzes) < target_count // 2)  # 5回以上試行しても目標数の半分に達していない場合
+            )
+            
+            if should_reset:
+                logger.info(
+                    f"[GENERATION_RETRY] 使用済みリストをリセット "
+                    f"(available={len(available_citations)}, consecutive_duplicates={consecutive_duplicates}, "
+                    f"accepted={len(accepted_quizzes)})"
+                )
                 used_citation_keys.clear()
                 available_citations = citations
+                consecutive_duplicates = 0  # リセット時に連続重複もリセット
             
             # 使用可能なcitationsからランダムに選択（多様性を確保）
             import random
@@ -139,6 +236,7 @@ async def generate_quizzes_with_retry(
                 selected_citations = available_citations
             
             # 1問ずつ生成（generate_and_validate_quizzesはcount=1専用）
+            # banned_statementsを渡して、既出・重複で落としたstatementを避ける
             batch_accepted, batch_rejected, batch_attempt_errors, batch_stats = await generate_and_validate_quizzes(
                 level=request.level,
                 count=1,  # 1問ずつ生成
@@ -146,41 +244,149 @@ async def generate_quizzes_with_retry(
                 citations=selected_citations,  # 選択したcitationsを使用
                 request_id=request_id,
                 attempt_index=attempts,
+                banned_statements=banned_statements if len(banned_statements) > 0 else None,
             )
             
             # 重複チェック: 新しく生成されたクイズが既存のものと重複していないか確認
             # CHANGED: ○と×を別々に管理し、最終的にバランス良く配置する
+            # また、○と×のペアが同じcitationから生成される場合、そのcitationを1回だけカウントする
             new_accepted_true = []
             new_accepted_false = []
             
-            for quiz in batch_accepted:
-                # 重複チェック
-                if _is_duplicate(quiz.statement, accepted_statements):
-                    # 重複している場合は除外
-                    logger.warning(f"重複クイズを除外: '{quiz.statement[:50]}...'")
+            # ○と×のペアを一緒に処理するため、まず○と×を分ける
+            batch_true = [q for q in batch_accepted if q.answer_bool]
+            batch_false = [q for q in batch_accepted if not q.answer_bool]
+            
+            # ○と×のペアを一緒に処理（同じcitationから生成されたペアは1つのcitationとして扱う）
+            # まず、○と×のペアをマッチング（同じcitationから生成された可能性が高い）
+            processed_true_quizzes = []
+            processed_false_quizzes = []
+            
+            # ○を処理
+            for true_quiz in batch_true:
+                # 重複チェック1: statementの重複
+                if _is_duplicate(true_quiz.statement, accepted_statements):
+                    logger.warning(f"重複クイズを除外: '{true_quiz.statement[:50]}...'")
                     all_rejected_items.append({
-                        "statement": quiz.statement[:100],
+                        "statement": true_quiz.statement[:100],
                         "reason": "duplicate_statement",
                     })
+                    # banned_statementsに追加（上限チェック）
+                    if len(banned_statements) < banned_statements_max:
+                        banned_statements.append(true_quiz.statement)
                     consecutive_duplicates += 1
-                else:
-                    # 重複していない場合は採用
-                    # ○と×を分けて管理
-                    if quiz.answer_bool:
-                        new_accepted_true.append(quiz)
-                    else:
-                        new_accepted_false.append(quiz)
-                    accepted_statements.append(quiz.statement)
-                    consecutive_duplicates = 0  # リセット
-                    
-                    # 使用済みcitationsを記録（重複対策）
-                    for citation in quiz.citations:
-                        citation_key = (
-                            citation.source,
-                            citation.page,
-                            citation.quote[:60] if citation.quote else ""
+                    continue
+                
+                # 重複チェック2: citationの重複（出題箇所の重複）
+                if _is_citation_duplicate(true_quiz.citations, used_citation_keys):
+                    # TypeError対策: pageを文字列に変換
+                    citation_strs = [
+                        f"{c.source}(p.{c.page})" if c.page is not None else f"{c.source}(p.None)"
+                        for c in true_quiz.citations[:2]
+                    ]
+                    logger.warning(
+                        f"出題箇所重複クイズを除外: '{true_quiz.statement[:50]}...' "
+                        f"(citations: {citation_strs})"
+                    )
+                    all_rejected_items.append({
+                        "statement": true_quiz.statement[:100],
+                        "reason": "duplicate_citation",
+                    })
+                    # banned_statementsに追加（上限チェック）
+                    if len(banned_statements) < banned_statements_max:
+                        banned_statements.append(true_quiz.statement)
+                    consecutive_duplicates += 1
+                    continue
+                
+                # ○を採用候補に追加
+                processed_true_quizzes.append(true_quiz)
+            
+            # ×を処理（○から生成された×は、対応する○と同じcitationを使用している可能性が高い）
+            # 対応する○が採用された場合、×も同じcitationを使用していても採用する
+            for false_quiz in batch_false:
+                # 重複チェック1: statementの重複
+                if _is_duplicate(false_quiz.statement, accepted_statements):
+                    logger.warning(f"重複クイズを除外: '{false_quiz.statement[:50]}...'")
+                    all_rejected_items.append({
+                        "statement": false_quiz.statement[:100],
+                        "reason": "duplicate_statement",
+                    })
+                    # banned_statementsに追加（上限チェック）
+                    if len(banned_statements) < banned_statements_max:
+                        banned_statements.append(false_quiz.statement)
+                    consecutive_duplicates += 1
+                    continue
+                
+                # 重複チェック2: citationの重複（出題箇所の重複）
+                # 注意: ×は○から生成されるため、同じcitationを使用している可能性が高い
+                # しかし、対応する○が採用された場合、×も採用する（○と×のペアは1つのcitationとして扱う）
+                # ただし、他の○問題と同じcitationを使用している場合は除外する
+                if _is_citation_duplicate(false_quiz.citations, used_citation_keys):
+                    # 対応する○が採用候補にあるかチェック（同じcitationを使用している可能性）
+                    has_corresponding_true = any(
+                        any(
+                            (c1.source, c1.page, c1.quote[:60] if c1.quote else "") ==
+                            (c2.source, c2.page, c2.quote[:60] if c2.quote else "")
+                            for c1 in false_quiz.citations
+                            for c2 in true_quiz.citations
                         )
-                        used_citation_keys.add(citation_key)
+                        for true_quiz in processed_true_quizzes
+                    )
+                    
+                    if not has_corresponding_true:
+                        # 対応する○がない場合、出題箇所の重複として除外
+                        citation_strs = [
+                            f"{c.source}(p.{c.page})" if c.page is not None else f"{c.source}(p.None)"
+                            for c in false_quiz.citations[:2]
+                        ]
+                        logger.warning(
+                            f"出題箇所重複クイズを除外: '{false_quiz.statement[:50]}...' "
+                            f"(citations: {citation_strs})"
+                        )
+                    all_rejected_items.append({
+                        "statement": false_quiz.statement[:100],
+                        "reason": "duplicate_citation",
+                    })
+                    # banned_statementsに追加（上限チェック）
+                    if len(banned_statements) < banned_statements_max:
+                        banned_statements.append(false_quiz.statement)
+                    consecutive_duplicates += 1
+                    continue
+                    # 対応する○がある場合、×も採用する（○と×のペアは1つのcitationとして扱う）
+                
+                # ×を採用候補に追加
+                processed_false_quizzes.append(false_quiz)
+            
+            # 採用候補を実際に採用
+            for true_quiz in processed_true_quizzes:
+                new_accepted_true.append(true_quiz)
+                accepted_statements.append(true_quiz.statement)
+                consecutive_duplicates = 0  # リセット
+                
+                # 使用済みcitationsを記録（○のcitationsを記録）
+                for citation in true_quiz.citations:
+                    citation_key = (
+                        citation.source,
+                        citation.page,
+                        citation.quote[:60] if citation.quote else ""
+                    )
+                    used_citation_keys.add(citation_key)
+            
+            for false_quiz in processed_false_quizzes:
+                new_accepted_false.append(false_quiz)
+                accepted_statements.append(false_quiz.statement)
+                consecutive_duplicates = 0  # リセット
+                
+                # 使用済みcitationsを記録（×のcitationsも記録）
+                # 注意: ×は○から生成されるため、同じcitationを使用している可能性が高い
+                # その場合、既に使用済みになっているが、念のため記録する
+                for citation in false_quiz.citations:
+                    citation_key = (
+                        citation.source,
+                        citation.page,
+                        citation.quote[:60] if citation.quote else ""
+                    )
+                    used_citation_keys.add(citation_key)
             
             # 重複が連続で発生した場合の警告
             if consecutive_duplicates >= max_consecutive_duplicates:
@@ -210,9 +416,14 @@ async def generate_quizzes_with_retry(
                     if isinstance(value, (int, float)):
                         aggregated_stats[key] += value
                     elif isinstance(value, dict):
-                        # dictの場合はマージ
+                        # dictの場合はマージ（数値のみ加算、それ以外は上書き）
+                        # sample_mutation_log 等は str を含むため str+int の TypeError を防ぐ
                         for k, v in value.items():
-                            aggregated_stats[key][k] = aggregated_stats[key].get(k, 0) + (v if isinstance(v, (int, float)) else 0)
+                            prev = aggregated_stats[key].get(k)
+                            if isinstance(v, (int, float)) and isinstance(prev, (int, float)):
+                                aggregated_stats[key][k] = prev + v
+                            else:
+                                aggregated_stats[key][k] = v
                 else:
                     aggregated_stats[key] = value
             

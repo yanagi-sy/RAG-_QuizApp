@@ -181,8 +181,8 @@ export default function QuizPlayPage() {
                   disabled={judging}
                   className={`h-16 rounded-xl border-2 font-medium text-lg transition-colors ${
                     selectedAnswer === true
-                      ? "border-blue-500 bg-blue-50 text-blue-700"
-                      : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                      ? "border-green-500 bg-green-50 text-green-700"
+                      : "border-green-300 bg-white text-green-700 hover:bg-green-50"
                   } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   ○
@@ -192,8 +192,8 @@ export default function QuizPlayPage() {
                   disabled={judging}
                   className={`h-16 rounded-xl border-2 font-medium text-lg transition-colors ${
                     selectedAnswer === false
-                      ? "border-blue-500 bg-blue-50 text-blue-700"
-                      : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                      ? "border-red-500 bg-red-50 text-red-700"
+                      : "border-red-300 bg-white text-red-700 hover:bg-red-50"
                   } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   ×

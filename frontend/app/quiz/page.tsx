@@ -178,12 +178,8 @@ export default function QuizPage() {
     }
   };
 
-  // クイズセットを削除
+  // クイズセットを削除（ワンクリックで削除）
   const handleDelete = async (id: string) => {
-    if (!confirm("このクイズセットを削除しますか？")) {
-      return;
-    }
-
     try {
       setDeleting(id);
       await deleteQuizSet(id);
@@ -356,7 +352,7 @@ export default function QuizPage() {
                 disabled={loadingGenerate || loadingSources}
                 className="h-12 min-w-[140px] rounded-xl bg-blue-600 px-6 text-base font-medium text-white hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
               >
-                {loadingGenerate ? "生成中..." : "5問生成"}
+                {loadingGenerate ? "生成中..." : "生成"}
               </button>
             </div>
           </div>
