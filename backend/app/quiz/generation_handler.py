@@ -414,6 +414,29 @@ async def generate_quizzes_with_retry(
                                 })
                                 continue
                         
+                        # 【品質担保】statementに火災関連キーワードが含まれている場合、sourceがsample*.txtでないことを確認
+                        # （statementに火災関連の内容が含まれているのに、citationのsourceがsample*.txtの場合は不一致）
+                        fire_keywords = ["火災", "避難", "災害", "防犯"]
+                        statement_has_fire = any(keyword in selected_quiz.statement for keyword in fire_keywords)
+                        
+                        if statement_has_fire and corresponding_citation and corresponding_citation.source:
+                            # sample*.txtファイルに火災関連の内容が含まれている場合は不一致として検出
+                            if corresponding_citation.source.startswith("sample") and corresponding_citation.source.endswith(".txt"):
+                                logger.error(
+                                    f"[GENERATION:STATEMENT_CONTENT_MISMATCH] 【重大】statementに火災関連内容があるのにcitationのsourceがsample*.txt: "
+                                    f"statement='{selected_quiz.statement[:50]}...', "
+                                    f"citation_source={corresponding_citation.source}, "
+                                    f"citation_quote_preview={corresponding_citation.quote[:100] if corresponding_citation.quote else 'N/A'}..., "
+                                    f"fire_keywords={[kw for kw in fire_keywords if kw in selected_quiz.statement]}"
+                                )
+                                all_rejected_items.append({
+                                    "statement": selected_quiz.statement[:100],
+                                    "reason": "statement_content_mismatch",
+                                    "citation_source": corresponding_citation.source,
+                                    "fire_keywords": [kw for kw in fire_keywords if kw in selected_quiz.statement],
+                                })
+                                continue
+                        
                         # statementの重複チェック
                         if _is_duplicate(selected_quiz.statement, accepted_statements):
                             consecutive_duplicates += 1
@@ -422,8 +445,6 @@ async def generate_quizzes_with_retry(
                             expected_source = request.source_ids[0] if request.source_ids and len(request.source_ids) > 0 else None
                             
                             # 【デバッグ】statementに火災関連キーワードが含まれている場合、citationのquoteも確認
-                            fire_keywords = ["火災", "避難", "災害", "防犯"]
-                            statement_has_fire = any(keyword in selected_quiz.statement for keyword in fire_keywords)
                             if statement_has_fire:
                                 citation_quotes = [c.quote[:100] if c.quote else "N/A" for c in selected_quiz.citations] if selected_quiz.citations else []
                                 logger.error(
