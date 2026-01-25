@@ -1,5 +1,9 @@
 """
-クイズのJSONパース
+クイズのJSONパース（LLM出力を堅牢に解釈）
+
+【初心者向け】
+- コードフェンス除去・先頭/末尾の余計な文字除去・{} 抽出 → json.loads
+- パース失敗時用の修復プロンプト（build_quiz_json_fix_messages）と組み合わせて利用
 """
 import json
 import logging
@@ -235,6 +239,21 @@ def _parse_single_quiz(
         else:
             logger.warning(f"クイズ {index} に statement も question もありません")
             return None
+    
+    # 【重要】statementが途中で切れていないかチェック（JSONが途中で切れた場合の検出）
+    statement = quiz_data.get("statement", "")
+    if isinstance(statement, str) and statement:
+        # 途中で切れている可能性のあるパターンをチェック
+        # 1. 文末が「。」で終わっていない（途中で切れている可能性）
+        # 2. 最後の文字が途中で切れている（例: 「において、店舗スタッフは **①お客様の安全 ②法令・規則 ③正確性 ④スピード** の順で優先し、判断に迷ったときは責任者へ報告する。」が途中で切れている）
+        # 3. JSONの閉じ括弧がstatement内に含まれている（JSONが途中で切れた可能性）
+        if statement.endswith(("}", "]", ",")) or (not statement.endswith(("。", ".", "！", "!", "？", "?")) and len(statement) > 50):
+            # 途中で切れている可能性が高い
+            logger.warning(
+                f"クイズ {index}: statementが途中で切れている可能性があります "
+                f"(statement_len={len(statement)}, statement_end={statement[-20:] if len(statement) >= 20 else statement})"
+            )
+            # ただし、validatorで弾かれる可能性があるため、ここでは警告のみ（後続処理でvalidatorがチェック）
     
     # false_statement フィールドの確認（観測ログ）
     has_false_statement = "false_statement" in quiz_data and quiz_data.get("false_statement")

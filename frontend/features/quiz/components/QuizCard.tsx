@@ -1,5 +1,9 @@
 "use client";
 
+/**
+ * クイズ問題カード（1問表示）
+ * 【初心者向け】question を表示。loading 時は「取得中…」、未出題時は「未出題」。
+ */
 interface QuizCardProps {
   question: string | null;
   loading?: boolean;

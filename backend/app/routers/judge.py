@@ -1,5 +1,9 @@
 """
-Judge APIルーター
+Judge APIルーター（クイズ採点のエンドポイント）
+
+【初心者向け】
+- POST /judge: quiz_id と answer(○/×) を受け取り、正誤と解説・引用を返す
+- クイズ情報は quiz.store から取得。未登録なら NOT_FOUND
 """
 import asyncio
 from fastapi import APIRouter

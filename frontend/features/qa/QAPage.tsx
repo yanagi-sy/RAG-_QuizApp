@@ -1,5 +1,10 @@
 "use client";
 
+/**
+ * QAページ（質問→回答のメインUI）
+ * 【初心者向け】RetrievalSlider（検索バランス）、AskForm（質問入力）、
+ * AnswerView（回答・引用表示）を組み合わせる。useAsk でAPI呼び出しと状態管理。
+ */
 import { useState } from "react";
 import AskForm from "./components/AskForm";
 import RetrievalSlider from "./components/RetrievalSlider";

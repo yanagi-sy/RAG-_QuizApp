@@ -1,5 +1,9 @@
 "use client";
 
+/**
+ * 検索バランススライダー（意味検索 vs キーワード検索）
+ * 【初心者向け】0〜1 の値で semantic_weight を指定。QA送信時に /ask に渡す。
+ */
 interface RetrievalSliderProps {
   value: number;
   onChange: (value: number) => void;

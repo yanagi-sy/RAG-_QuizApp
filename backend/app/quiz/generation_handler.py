@@ -1,7 +1,10 @@
 """
-Quiz生成の再試行ロジック
+Quiz生成の再試行ロジック（目標数に達するまで複数回生成）
 
-generate_and_validate_quizzes を呼び出して、複数回試行する。
+【初心者向け】
+- 1 citation から1問（○のみ）を生成し、使用済み citation を記録して重複を防ぐ
+- 試行ごとに batch で複数 citation を処理。規定数に達するか max_attempts まで繰り返す
+- 重複・source不一致は除外。banned_statements で既出をLLMに伝え多様性を確保
 """
 import logging
 import re

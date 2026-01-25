@@ -1,8 +1,11 @@
 """
-Quiz専用: Chunk Pool（検索不要で根拠を確保）
+Quiz専用 Chunk Pool（資料ごとのチャンクID一覧）
 
-Chromaから sourceごとの chunk id一覧を作り、必要な分だけ取り出せるようにする。
-起動時 or 初回アクセスで lazy build（メモリに cache）。
+【初心者向け】
+- Chroma の全チャンクを source ごとにID一覧として保持。検索せずランダムサンプル用
+- 初回アクセスでビルドしメモリにキャッシュ。threading.Lock で排他制御
+- 1 source あたり最大 quiz_pool_max_ids_per_source 件。バッチ取得でメモリ節約
+- Unicode NFC 正規化でキーを統一（macOS NFD 対策）
 """
 import logging
 import random

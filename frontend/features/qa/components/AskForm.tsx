@@ -1,5 +1,10 @@
 "use client";
 
+/**
+ * QA用質問入力フォーム
+ * 【初心者向け】テキスト入力と送信ボタン。空欄はエラー表示。
+ * INVALID_INPUT はここで表示し、他エラーは AnswerView で表示・再試行。
+ */
 import { useState } from "react";
 import type { ApiError } from "@/lib/types";
 

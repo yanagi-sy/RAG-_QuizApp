@@ -1,5 +1,7 @@
 /**
- * Quiz用カスタムフック
+ * Quiz用カスタムフック（出題・採点の状態とAPI呼び出し）
+ * 【初心者向け】level/quizId/question/loading/error などを保持。
+ * generateQuiz: /quiz で出題、judge: /judge で採点。retry/reset も提供。
  */
 import { useState } from "react";
 import { createQuiz, judgeAnswer } from "@/lib/api";

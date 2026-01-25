@@ -1,5 +1,10 @@
 "use client";
 
+/**
+ * クイズページ（生成・管理タブ）
+ * 【初心者向け】生成: 資料選択・難易度・問題数で /quiz/generate を呼び、プレイへ遷移。
+ * 管理: 保存済みクイズセット一覧・詳細・削除。getAvailableSources / generateQuizSet / listQuizSets 等を利用。
+ */
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {

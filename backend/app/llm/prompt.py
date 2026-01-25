@@ -1,5 +1,10 @@
 """
-プロンプト生成ロジック
+プロンプト生成ロジック（LLMへ渡すメッセージの組み立て）
+
+【初心者向け】
+- build_messages: QA用。質問＋引用(citations)を system/user で渡し、根拠に基づく回答を促す
+- build_quiz_generation_messages: Quiz用。引用だけを材料に○×問題をJSONで出力する指示
+- build_quiz_json_fix_messages: JSONパース失敗時の修復用プロンプト
 """
 from typing import List, Literal
 
@@ -279,6 +284,7 @@ T13: 「【判断基準1・状況】かつ【判断基準2・状況】に該当�
 要求:
 - quizzes配列に{count}個含める
 - statementは{allowed_templates}のテンプレートに従う（必ず肯定文のみ）
+- 【重要】statementは必ず完全な文で出力すること（途中で切れないこと、必ず「。」で終わること）
 - answer_boolは全てtrue
 - explanationは{explanation_guide}
 - 【最重要】引用に基づく事実のみ（推測禁止、引用に無い情報は追加しない）

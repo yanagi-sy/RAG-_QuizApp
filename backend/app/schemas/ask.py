@@ -1,5 +1,9 @@
 """
-QA (Ask) API用スキーマ
+QA (Ask) API用スキーマ（リクエスト・レスポンスの型）
+
+【初心者向け】
+- AskRequest: question, retrieval, debug など
+- AskResponse: answer, citations, debug（debug=true 時）
 """
 from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field

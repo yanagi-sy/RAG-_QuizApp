@@ -1,9 +1,15 @@
 """
-共通エラーハンドリング
+共通エラーハンドリング（APIで返すエラー形式の統一）
+
+【初心者向け】
+- フロントエンドが { "error": { "code": "...", "message": "..." } } で
+  エラーを受け取れるよう、共通形式で例外を投げる
+- raise_invalid_input 等のヘルパーで、コードごとのHTTPステータスを自動設定
 """
 from fastapi import HTTPException, status
 from typing import Literal
 
+# エラーコード一覧（型安全のため Literal で定義）
 ErrorCode = Literal[
     "INVALID_INPUT",
     "NOT_FOUND",

@@ -1,7 +1,9 @@
 """
-Quiz生成のデバッグ情報構築
+Quiz生成のデバッグ情報構築（エラー・デバッグレスポンス用）
 
-エラーレスポンスとデバッグレスポンスを構築する。
+【初心者向け】
+- build_error_response: 引用0件などエラー時の debug 用辞書を組み立てる
+- build_debug_response: 正常・422時用。retrieval/LLM の統計・試行履歴などを含める
 """
 import logging
 from typing import Dict, Any, Optional

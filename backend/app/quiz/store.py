@@ -1,8 +1,10 @@
 """
-Quiz用ストア（in-memory + JSONファイルベース永続化）
+Quiz用ストア（クイズ・クイズセットの保存・読み出し）
 
-QuizItem: in-memoryストア（旧実装、後方互換性のため維持）
-QuizSet: JSONファイルベース永続化（新実装）
+【初心者向け】
+- QuizItem: 旧実装。メモリ上にクイズを保持（Judge用、後方互換）
+- QuizSet: 新実装。JSONファイルで永続化。保存・一覧・取得・削除
+- 保存先は backend/data/quiz_sets/。ファイル名は UUID
 """
 import json
 import logging

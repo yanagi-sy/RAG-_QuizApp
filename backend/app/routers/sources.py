@@ -1,7 +1,9 @@
 """
-Sources APIルーター
+Sources APIルーター（資料一覧のエンドポイント）
 
-検索対象の資料一覧を取得するエンドポイント
+【初心者向け】
+- GET /sources: ChromaDB の metadata.source をユニーク収集し、id/title/type で返す
+- フロントの資料選択や Quiz の source_ids 指定に使う
 """
 from fastapi import APIRouter
 from typing import List

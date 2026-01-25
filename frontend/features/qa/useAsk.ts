@@ -1,5 +1,7 @@
 /**
- * QA用カスタムフック
+ * QA用カスタムフック（質問送信・回答表示の状態とAPI呼び出し）
+ * 【初心者向け】loading/error/result を保持。submit で /ask に質問を送り、
+ * retrieval.semantic_weight で意味検索とキーワード検索のバランスを指定。retry/reset あり。
  */
 import { useState } from "react";
 import { askQuestion } from "@/lib/api";

@@ -1,7 +1,8 @@
 /**
- * API型定義
+ * API型定義（リクエスト・レスポンス・エラーの型）
+ * 【初心者向け】ApiError / Citation / AskRequest|Response / Quiz系 / Judge系 など。
+ * バックエンドのスキーマと対応させ、型安全にAPIを利用する。
  */
-
 // エラーコード型
 export type ErrorCode = "INVALID_INPUT" | "NOT_FOUND" | "TIMEOUT" | "INTERNAL_ERROR" | "NETWORK_ERROR";
 

@@ -1,5 +1,10 @@
 """
-Embedding生成（sentence-transformers使用）
+Embedding生成（テキスト→ベクトル変換）
+
+【初心者向け】
+- Embedding = 文や単語を数値ベクトル（例: 384次元）に変換したもの
+- 似た意味の文は似たベクトルになるので、「意味で検索」するRAGの土台
+- E5モデル: queryには "query: ", passageには "passage: " のprefixを付ける仕様
 """
 import logging
 from functools import lru_cache

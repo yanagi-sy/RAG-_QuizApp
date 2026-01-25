@@ -1,5 +1,9 @@
 """
-Search APIルーター
+Search APIルーター（チャンク検索のエンドポイント）
+
+【初心者向け】
+- POST /search: クエリでチャンクをキーワード検索し、スニペット付き候補を返す
+- 検索は search.index のキーワード＋2-gramフォールバックを利用
 """
 from fastapi import APIRouter
 

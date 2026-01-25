@@ -1,5 +1,10 @@
 "use client";
 
+/**
+ * 難易度選択UI（beginner / intermediate / advanced）
+ * 【初心者向け】ラジオ＋出題ボタン。useQuiz の level/setLevel と連動。
+ * エラー時は再試行可能な場合のみ再試行ボタンを表示。
+ */
 import type { Level, ApiError } from "@/lib/types";
 
 interface DifficultyPickerProps {

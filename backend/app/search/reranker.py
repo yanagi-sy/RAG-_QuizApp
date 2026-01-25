@@ -1,5 +1,10 @@
 """
-Cross-Encoder リランキング
+Cross-Encoder リランキング（QA用・検索精度向上）
+
+【初心者向け】
+- (query, document) のペアごとに関連度スコアを出し、候補を再ソートする
+- Semantic検索の上位候補をさらに絞り込む用途。モデルは mmarco-mMiniLM 等
+- 計算コストが高いため、候補を絞ってから適用する設計
 """
 import logging
 from typing import List, Tuple, Optional

@@ -1,5 +1,11 @@
 """
-クイズのバリデーション
+クイズのバリデーション（LLM出力の○×問題をチェック）
+
+【初心者向け】
+- statement に ?/？ がないか、type が true_false か、answer_bool が bool か、
+  citations が1件以上あるか などを検証
+- statementが途中で切れていないかもチェック（完全性検証）
+- 不合格なら reason 付きで除外し、採用/却下を分ける
 """
 import re
 import logging
@@ -152,6 +158,28 @@ def validate_quiz_item(item: dict) -> tuple[bool, str]:
         # 「。」で終わっていない場合は追加（ただし、既に「?」「？」でreject済み）
         # ここでは「。」がない場合のみreject（整形は後処理で行う）
         return (False, "missing_period_end")
+    
+    # 【重要】statementが途中で切れていないかチェック（JSONが途中で切れた場合の検出）
+    # 1. JSONの閉じ括弧がstatement内に含まれている（JSONが途中で切れた可能性）
+    if "}" in statement or "]" in statement or statement.endswith(","):
+        # ただし、引用内に「}」や「]」が含まれる可能性があるため、文末のみチェック
+        if statement_stripped.endswith(("}", "]", ",")):
+            logger.warning(
+                f"statementが途中で切れている可能性: statement_end='{statement_stripped[-10:]}'"
+            )
+            return (False, "statement_truncated_json")
+    
+    # 2. statementが不自然に短い（途中で切れている可能性）
+    # ただし、既に12文字以上チェック済みなので、ここでは50文字未満で「において」などの接続詞で終わっている場合をチェック
+    if len(statement_stripped) < 50:
+        # 接続詞や助詞で終わっている場合、途中で切れている可能性
+        truncated_endings = ["において", "の場合", "の際", "の時", "のため", "により", "によって", "の順で", "の順に"]
+        for ending in truncated_endings:
+            if statement_stripped.endswith(ending):
+                logger.warning(
+                    f"statementが途中で切れている可能性（接続詞で終了）: statement_end='{ending}'"
+                )
+                return (False, f"statement_truncated_connector:{ending}")
     
     # 曖昧表現チェック（○×として判定不能）
     for phrase in AMBIGUOUS_PHRASES:

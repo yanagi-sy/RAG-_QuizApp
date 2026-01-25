@@ -1,5 +1,10 @@
 "use client";
 
+/**
+ * QA用回答・引用表示
+ * 【初心者向け】loading/error/result に応じて「取得中…」「エラー」「回答＋引用」を表示。
+ * 再試行可能なエラー時は再試行ボタンを出す。引用は source / page / quote で表示。
+ */
 import type { AskResponse, ApiError, Citation } from "@/lib/types";
 
 interface AnswerViewProps {

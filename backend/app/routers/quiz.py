@@ -1,5 +1,11 @@
 """
-Quiz APIルーター
+Quiz APIルーター（クイズ生成・保存・一覧のエンドポイント）
+
+【初心者向け】
+- POST /quiz: ダミー出題（旧仕様）
+- POST /quiz/generate: 教材サンプリングで根拠を取得し、LLMで○×問題を生成
+- GET/POST/DELETE /quiz/sets: 生成したクイズセットの保存・一覧・取得・削除
+- source_ids は1件必須。規定数に達しない場合は422でdebug付きエラーを返す
 """
 import asyncio
 import logging

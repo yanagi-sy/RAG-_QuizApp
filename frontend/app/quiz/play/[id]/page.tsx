@@ -1,5 +1,10 @@
 "use client";
 
+/**
+ * クイズプレイページ（/quiz/play/[id]）
+ * 【初心者向け】クイズセットIDで問題を取得し、1問ずつ○×で回答。正誤・解説・引用を表示。
+ * 次の問題へ進む／終了で一覧に戻る。judge はクライアント側で answer_bool と比較して実施。
+ */
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {

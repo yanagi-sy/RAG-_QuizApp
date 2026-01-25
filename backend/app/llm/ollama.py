@@ -1,5 +1,10 @@
 """
-Ollama LLMクライアント実装
+Ollama LLMクライアント（ローカルLLMとの通信）
+
+【初心者向け】
+- Ollama: ローカルで動くLLM実行環境。llama3 等のモデルを /api/chat で利用
+- チャット形式のメッセージを送り、テキストの回答を受け取る
+- Quiz用は format=json や num_predict など、生成の安定化オプションを付与
 """
 import logging
 from functools import lru_cache

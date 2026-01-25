@@ -1,5 +1,10 @@
 """
-QA (Ask) APIルーター
+QA (Ask) APIルーター（質問→回答のエンドポイント）
+
+【初心者向け】
+- POST /ask: 質問文を受け取り、ハイブリッド検索＋LLMで回答と引用(citations)を返す
+- 検索: Semantic(Chroma)＋Keyword → RRF融合 → Cross-Encoderリランク → top_k 件を引用
+- LLMは引用だけを根拠に回答。タイムアウト・エラー時は引用のみ返す
 """
 import asyncio
 import logging

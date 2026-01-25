@@ -1,5 +1,10 @@
 """
-RAGインデックス作成（ChromaDBへの登録）
+RAGインデックス作成（ドキュメント→チャンク→Embedding→ChromaDB登録）
+
+【初心者向け】
+- 起動時または /docs/summary などで呼ばれ、manuals 内のtxt/pdfを処理
+- 流れ: load_documents → chunk_document_for_rag → embed_passages → upsert_chunks
+- 既にデータがある場合はスキップ（force_rebuild=True で再構築）
 """
 import logging
 from pathlib import Path

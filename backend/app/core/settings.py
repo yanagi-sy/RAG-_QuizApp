@@ -1,5 +1,10 @@
 """
-アプリケーション設定
+アプリケーション設定（環境変数・定数の一元管理）
+
+【初心者向け】
+- Pydantic Settings: 環境変数や.envを読んで型付きで扱うための仕組み
+- ここで定義した値は app.core.settings.settings から参照できる
+- 主な分類: CORS, ドキュメント/RAG, 検索, Quiz, Ollama(LLM)
 """
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -7,7 +12,10 @@ from typing import List
 
 
 class Settings(BaseSettings):
-    """アプリケーション設定"""
+    """
+    アプリケーション設定クラス
+    環境変数（または.env）の値が自動でここにマッピングされる
+    """
 
     # CORS設定
     cors_origins: List[str] = ["http://localhost:3000"]
@@ -225,9 +233,9 @@ class Settings(BaseSettings):
         description="Quiz専用モデル名（未指定なら ollama_model を使用）"
     )
     quiz_ollama_num_predict: int = Field(
-        default=400,
+        default=800,  # CHANGED: 400 → 800（長いstatement対応、途中で切れる問題を解決）
         alias="QUIZ_OLLAMA_NUM_PREDICT",
-        description="Quiz生成時の最大トークン数（厳格なタイムアウト対策、350-500推奨）"
+        description="Quiz生成時の最大トークン数（長いstatement対応、800推奨）"
     )
     quiz_ollama_num_ctx: int = Field(
         default=4096,

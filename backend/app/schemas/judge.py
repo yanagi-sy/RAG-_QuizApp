@@ -1,5 +1,9 @@
 """
-Judge API用スキーマ
+Judge API用スキーマ（採点のリクエスト・レスポンス型）
+
+【初心者向け】
+- JudgeRequest: quiz_id, answer（true=○ / false=×）
+- JudgeResponse: is_correct, correct_answer, explanation, citations
 """
 from pydantic import BaseModel, Field
 

@@ -1,5 +1,10 @@
 """
-ChromaDB Vector Store（Semantic Retrieval用）
+ChromaDB Vector Store（ベクトルDBの操作）
+
+【初心者向け】
+- ChromaDB: Embeddingを保存し、コサイン類似度で「似たベクトル」を検索するDB
+- 永続化は SQLite ベースで、chroma_dir 配下に保存
+- コレクション rag_chunks に id / embedding / document / metadata を格納
 """
 import logging
 from pathlib import Path

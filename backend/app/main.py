@@ -1,5 +1,11 @@
 """
-FastAPIアプリケーションのエントリーポイント
+FastAPIアプリケーションのエントリーポイント（アプリの起動入口）
+
+【初心者向け】
+このファイルはRAG Quiz AppのバックエンドAPIサーバーを起動する「玄関」です。
+- FastAPI: PythonのWebフレームワーク。REST APIを簡単に作れる
+- 起動時に /health, /ask, /quiz などのルート（APIの窓口）を登録し、
+  起動イベントでドキュメントをChromaDBにインデックス化します
 
 実行方法:
     venv有効化後:
@@ -24,7 +30,8 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS設定: 環境変数から読み込む
+# CORS設定: フロントエンド（Next.js）からAPIを呼ぶ際の跨域通信を許可
+# 環境変数 CORS_ORIGINS で許可するオリジン（例: http://localhost:3000）を指定
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -33,7 +40,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ルーター登録
+# ルーター登録: 各APIの「窓口」をURLパスに割り当て
+# /health=死活確認, /ask=QA質問, /quiz=クイズ, /judge=採点, /docs=資料, /search=検索
 app.include_router(health.router, prefix="/health", tags=["health"])
 app.include_router(ask.router, prefix="/ask", tags=["ask"])
 app.include_router(quiz.router, prefix="/quiz", tags=["quiz"])
@@ -42,9 +50,12 @@ app.include_router(docs.router, prefix="/docs", tags=["docs"])
 app.include_router(search.router, prefix="/search", tags=["search"])
 
 
-@app.on_event("startup")  # NEW: 起動時にインデックス作成
+@app.on_event("startup")
 async def startup_event():
-    """起動時の処理（インデックス作成）"""
+    """
+    起動時の処理: manuals内のドキュメントをChromaDBに登録（インデックス作成）
+    インデックス = 検索用の索引。これがないとQA/Quizで資料を検索できない
+    """
     # CHANGED: CHROMA_DIRとDOCS_DIRの実パスをログ出力（観測性強化）
     from pathlib import Path
     from app.docs.loader import _find_repo_root

@@ -1,5 +1,9 @@
 """
-検索API用スキーマ
+検索API用スキーマ（Search のリクエスト・レスポンス型）
+
+【初心者向け】
+- SearchRequest: query, k（取得件数）
+- SearchResponse: candidates（source, page, snippet, score）
 """
 from typing import Optional
 from pydantic import BaseModel, Field

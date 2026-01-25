@@ -1,3 +1,8 @@
+/**
+ * ルートレイアウト（全ページ共通の外枠）
+ * 【初心者向け】フォント・メタデータ・ヘッダーナビ（QA/クイズ）を設定。
+ * children に各ページの内容が入る。
+ */
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";

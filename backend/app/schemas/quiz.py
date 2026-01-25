@@ -1,5 +1,10 @@
 """
-Quiz API用スキーマ
+Quiz API用スキーマ（クイズ生成・セットの型）
+
+【初心者向け】
+- QuizGenerateRequest: level, count, source_ids, topic, debug, save
+- QuizItem: 1問分（id, type, statement, answer_bool, explanation, citations）
+- QuizSet / QuizSetMetadata: 保存したクイズセットとその一覧用
 """
 from typing import Literal, Optional, Dict, Any
 from pydantic import BaseModel, Field

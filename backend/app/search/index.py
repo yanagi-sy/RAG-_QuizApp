@@ -1,5 +1,10 @@
 """
-検索インデックス（暫定実装）
+検索インデックス（キーワード・2-gram検索用）
+
+【初心者向け】
+- RAGの「キーワード検索」で利用。Semantic(Chroma)とは別に、単語マッチで候補を出す
+- チャンクは docs の loader/chunker で作り、メモリにキャッシュ
+- 検索: キーワード＋最小スコア閾値 → ヒット0件なら2-gramでフォールバック
 """
 import logging
 from typing import List, Optional, Set, Tuple

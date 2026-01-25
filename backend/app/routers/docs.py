@@ -1,5 +1,9 @@
 """
-Docs APIルーター
+Docs APIルーター（ドキュメント概要・ソース一覧のエンドポイント）
+
+【初心者向け】
+- GET /docs/summary: ファイル単位の文字数・チャンク数・カテゴリなど
+- GET /docs/sources: ChromaDBから登録済みソース名の一覧を返す
 """
 from fastapi import APIRouter
 from typing import List

@@ -1,5 +1,10 @@
 """
-ドキュメント読み込みモジュール
+ドキュメント読み込みモジュール（manuals内のtxt/pdfを読む）
+
+【初心者向け】
+- manuals/ 配下の .txt / .pdf を読み、Document のリストに変換する
+- PDF は PyMuPDF(fitz) でページ単位にテキスト抽出
+- リポジトリルートは __file__ から相対で算出し、docs_dir を解決する
 """
 import logging
 from pathlib import Path

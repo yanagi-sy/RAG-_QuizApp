@@ -1,5 +1,9 @@
 """
-LLMアダプタ層の基底定義
+LLMアダプタ層の基底定義（抽象インターフェース・例外）
+
+【初心者向け】
+- LLMClient: Protocol。Ollama 等の実装が chat(messages) を提供する約束
+- LLMTimeoutError / LLMInternalError: LLM 呼び出し失敗時に raise。routers 等で捕捉
 """
 from typing import Protocol, List, Dict, Any
 

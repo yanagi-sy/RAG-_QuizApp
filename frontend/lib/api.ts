@@ -1,7 +1,8 @@
 /**
- * API呼び出し共通関数
+ * API呼び出し共通関数（バックエンドへのHTTPリクエスト）
+ * 【初心者向け】fetchApi で共通エラーハンドリング。Ask / Quiz / Judge / Search /
+ * Docs / Sources など各APIのラッパーを export。BASE_URL は環境変数で指定可能。
  */
-
 import { ApiError, type ApiErrorResponse, toApiError } from "./types";
 
 // toApiErrorをエクスポート（他のファイルで使用可能にする）

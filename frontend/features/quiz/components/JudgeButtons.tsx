@@ -1,5 +1,9 @@
 "use client";
 
+/**
+ * ○×判定ボタン
+ * 【初心者向け】onJudge(true)=○、onJudge(false)=× を渡す。disabled/loading で制御。
+ */
 interface JudgeButtonsProps {
   onJudge: (answer: boolean) => void;
   disabled?: boolean;

@@ -1,9 +1,11 @@
 """
-Quiz専用: retrieveを「検索」から「サンプル取得」に変更
+Quiz専用 Retrieval（検索ではなくサンプリングで根拠を取得）
 
-/ask とは完全に独立した、クイズ生成に特化したサンプリング処理。
-- 抽象クエリの関連性やrerank閾値で 0件にならない設計
-- source → chunk pool → sample → level別フィルタ → citations
+【初心者向け】
+- /ask とは別。クイズ用は「質問で検索」せず、指定資料からチャンクをランダムサンプル
+- 流れ: Chunk Pool → 指定sourceからIDをサンプル → collection.get で本文取得
+  → chunk_selector で難易度フィルタ → citations 作成（最低CIT_MIN件確保）
+- source_ids は1件必須（routerで検証済み）。Unicode NFC正規化で比較
 """
 import logging
 import time
