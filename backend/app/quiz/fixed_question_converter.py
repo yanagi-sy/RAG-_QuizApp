@@ -20,11 +20,26 @@ def _convert_to_false_statement_with_fallback(original_statement: str) -> str:
     """
     ○問題を×問題に変換（複数の代替方法を試行）
     
+    【初心者向け】
+    4問目と5問目を×問題に固定するため、○問題を×問題に変換します。
+    変換には複数の方法を試行し、どれか1つでも成功すれば変換された文を返します。
+    
+    処理の流れ:
+    1. mutatorモジュールのmake_false_statementを試行（基本的な変換ルール）
+    2. 失敗した場合、代替方法1: 文末の否定化（例: "行う。" → "行わない。"）
+    3. 失敗した場合、代替方法2: "必ず"を削除
+    4. 失敗した場合、代替方法3: "必須"を"任意"に変換
+    5. 失敗した場合、代替方法4: "必要"を"不要"に変換
+    6. すべて失敗した場合、代替方法5: 文頭に「誤り：」を追加（最後の手段）
+    
     Args:
-        original_statement: 元の○問題のstatement
+        original_statement: 元の○問題のstatement（正しい断言文）
         
     Returns:
-        変換された×問題のstatement
+        変換された×問題のstatement（誤った断言文）
+        
+    Example:
+        "地震時は身を守る行動をとる。" → "地震時は身を守る行動をとらない。"
     """
     false_statement = make_false_statement(original_statement)
     
@@ -90,12 +105,22 @@ def convert_quiz_to_false(quiz: QuizItemSchema, question_index: int) -> QuizItem
     """
     クイズを×問題に変換
     
+    【初心者向け】
+    ○問題（正しい断言文）を×問題（誤った断言文）に変換します。
+    変換には複数の方法を試行し、どれか1つでも成功すれば変換されたクイズを返します。
+    
+    処理の流れ:
+    1. 元のクイズが○問題（answer_bool=True）か確認
+    2. 既に×問題の場合はそのまま返す
+    3. ○問題の場合、_convert_to_false_statement_with_fallbackで×問題に変換
+    4. 新しいIDを生成し、explanationを更新（「この文は誤りです。正しくは...」）
+    
     Args:
-        quiz: 変換対象のクイズ（○問題）
-        question_index: 問題のインデックス（4問目=3, 5問目=4）
+        quiz: 変換対象のクイズ（○問題、answer_bool=True）
+        question_index: 問題のインデックス（4問目=3, 5問目=4、0始まり）
         
     Returns:
-        変換された×問題のクイズ
+        変換された×問題のクイズ（answer_bool=False、新しいID、更新されたexplanation）
     """
     # 元のstatementが○問題であることを確認（念のため）
     if not quiz.answer_bool:
@@ -123,14 +148,26 @@ def apply_fixed_questions(accepted_quizzes: list[QuizItemSchema]) -> list[QuizIt
     """
     4問目と5問目を×問題に固定
     
-    【固定ルール】4問目と5問目を×問題に固定
-    - 4問目（インデックス3）と5問目（インデックス4）が存在する場合、×問題に変換
+    【初心者向け】
+    クイズセットに必ず×問題が含まれるようにするため、4問目と5問目を×問題に固定します。
+    これにより、ユーザーは○問題だけでなく×問題も解くことができ、学習効果が向上します。
+    
+    【固定ルール】
+    - 4問目（インデックス3）が存在する場合、×問題に変換
+    - 5問目（インデックス4）が存在する場合、×問題に変換
+    - 既に×問題の場合はそのまま（変換しない）
+    
+    処理の流れ:
+    1. accepted_quizzesのコピーを作成（元のリストを変更しない）
+    2. 4問目（インデックス3）が存在する場合、convert_quiz_to_falseで変換
+    3. 5問目（インデックス4）が存在する場合、convert_quiz_to_falseで変換
+    4. 変換後のリストを返す
     
     Args:
-        accepted_quizzes: 採用されたクイズのリスト
+        accepted_quizzes: 採用されたクイズのリスト（○問題のみ、または○と×の混在）
         
     Returns:
-        固定問題を適用したクイズのリスト
+        固定問題を適用したクイズのリスト（4問目と5問目が×問題に変換されている）
     """
     result = list(accepted_quizzes)  # コピーを作成
     

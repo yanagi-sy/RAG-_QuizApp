@@ -83,6 +83,8 @@ rag-quiz-app/
 │   │   ├── docs/           # ドキュメント読込・チャンク分割
 │   │   ├── rag/            # Embedding・ChromaDB・インデックス
 │   │   ├── quiz/           # クイズ生成・サンプリング・バリデーション・保存
+│   │   │   ├── duplicate_checker.py      # 重複チェック機能（statement・citation）
+│   │   │   ├── fixed_question_converter.py  # 固定問題変換（4問目・5問目を×問題に）
 │   │   ├── llm/            # Ollama・プロンプト
 │   │   ├── routers/        # API（health, ask, quiz, judge, search, docs）
 │   │   ├── schemas/        # リクエスト/レスポンス型

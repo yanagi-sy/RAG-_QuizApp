@@ -113,7 +113,9 @@ async def generate_quizzes_with_retry(
         )
         
         try:
-            # 使用済みcitationsを除外したcitationsを取得
+            # 【ステップ1】使用済みcitationsを除外したcitationsを取得
+            # 同じcitationから同じクイズが生成されるのを防ぐため、既に使用したcitationは除外
+            # citation_keyは (source, page, quote先頭60文字) のタプルで一意性を保証
             available_citations = [
                 c for c in citations
                 if (c.source, c.page, c.quote[:60] if c.quote else "") not in used_citation_keys
@@ -160,11 +162,13 @@ async def generate_quizzes_with_retry(
                         f"[GENERATION_RETRY] 最後の試行のため、リセットせずに続行します"
                     )
             
-            # 残り必要数を計算（1回の試行で最大5問生成を想定）
+            # 【ステップ2】残り必要数を計算し、1回の試行で生成するbatch_sizeを決定
+            # 1回の試行で最大5問生成を想定（効率化のため並列生成）
             remaining = target_count - len(accepted_quizzes)
             batch_size = min(5, remaining, len(available_citations))
             
-            # 使用可能なcitationsからbatch_size件を選択（1回の試行で複数問生成）
+            # 【ステップ3】使用可能なcitationsからbatch_size件をランダムに選択
+            # 1回の試行で複数問を並列生成するため、複数のcitationを選択
             if len(available_citations) >= batch_size:
                 selected_citations_list = random.sample(available_citations, batch_size)
             else:
@@ -174,13 +178,15 @@ async def generate_quizzes_with_retry(
                 logger.warning("[GENERATION_RETRY] 使用可能なcitationsがありません")
                 break
             
-            # 【新戦略】各citationから1問（○のみ）を生成
-            batch_quizzes = []  # 生成されたクイズのリスト
-            batch_rejected = []
-            batch_attempt_errors = []
-            batch_stats = {}
+            # 【ステップ4】各citationから1問（○のみ）を生成
+            # 新戦略: 1つのcitationから1問のみ生成し、使用済みcitationを記録することで重複を防ぐ
+            batch_quizzes = []  # 生成されたクイズのリスト（(quiz, citation)のタプル）
+            batch_rejected = []  # バリデーション失敗したアイテム情報
+            batch_attempt_errors = []  # 試行ごとの失敗履歴
+            batch_stats = {}  # 統計情報（生成数、却下理由など）
             
-            # 並列生成（効率化のため）
+            # 【ステップ5】並列生成の準備（効率化のため複数のcitationを同時に処理）
+            # 各citationに対してgenerate_and_validate_quizzesを呼び出すタスクを作成
             import asyncio
             generation_tasks = []
             for citation_idx, single_citation in enumerate(selected_citations_list):
@@ -296,7 +302,9 @@ async def generate_quizzes_with_retry(
                                     })
                                     continue
                         
-                        # statementの重複チェック
+                        # 【ステップ6】statementの重複チェック
+                        # duplicate_checkerモジュールの関数を使用して、既存のstatementと重複していないか確認
+                        # 重複判定は2段階: 1) 通常の正規化（空白・句読点除去）で完全一致、2) コア内容キー（否定語除去後）で一致
                         if is_duplicate_statement(selected_quiz.statement, accepted_statements):
                             consecutive_duplicates += 1
                             # 【デバッグ】重複クイズのsource情報を出力
@@ -325,9 +333,11 @@ async def generate_quizzes_with_retry(
                         # 重複がなかった場合はリセット
                         consecutive_duplicates = 0
                         
-                        # 【品質担保】citationsはLLM出力を無視し、生成に使ったsingle_citationを必ず付与
+                        # 【ステップ7】citationsの紐付け（品質担保）
+                        # LLM出力のcitationsを無視し、生成に使ったsingle_citationを必ず付与
+                        # これにより、どのcitationから生成されたかが明確になる
                         # quiz.citationsは最低1件保証（single_citation）
-                        # 同一sourceで最大2件まで追加は任意
+                        # 同一sourceで最大2件まで追加は任意（LLMが追加したcitationがあれば採用）
                         if corresponding_citation:
                             # LLM出力のcitationsを無視し、single_citationを先頭に配置
                             # 同一sourceのcitationsを最大2件まで追加（single_citation + 追加1件）
@@ -484,13 +494,16 @@ async def generate_quizzes_with_retry(
             if attempts >= max_attempts:
                 break
     
-    # 【新戦略】確率的選択により既にバランスが取れているため、そのまま使用
-    # ただし、目標数を超えている場合はスライス
+    # 【ステップ8】生成数の調整
+    # 確率的選択により既にバランスが取れているため、そのまま使用
+    # ただし、目標数を超えている場合はスライスして目標数に合わせる
     if len(accepted_quizzes) > target_count:
         logger.info(f"生成数が目標数（{target_count}問）を超えています（{len(accepted_quizzes)}問）。目標数にスライスします。")
         accepted_quizzes = accepted_quizzes[:target_count]
     
-    # 【固定ルール】4問目と5問目を×問題に固定
+    # 【ステップ9】固定問題の変換（4問目と5問目を×問題に固定）
+    # fixed_question_converterモジュールの関数を使用して、○問題を×問題に変換
+    # これにより、クイズセットに必ず×問題が含まれるようになる
     accepted_quizzes = apply_fixed_questions(accepted_quizzes)
     
     # 経過時間を計算
