@@ -7,135 +7,19 @@ Quiz生成の再試行ロジック（目標数に達するまで複数回生成�
 - 重複・source不一致は除外。banned_statements で既出をLLMに伝え多様性を確保
 """
 import logging
-import re
+import random
+import time
 import unicodedata
-import uuid
-from typing import Dict, Any
 
 from app.schemas.quiz import QuizGenerateRequest, QuizItem as QuizItemSchema
 from app.schemas.common import Citation
 from app.quiz.generator import generate_and_validate_quizzes
+from app.quiz.duplicate_checker import is_duplicate_statement
+from app.quiz.fixed_question_converter import apply_fixed_questions
 from app.core.settings import settings
 
 # ロガー設定
 logger = logging.getLogger(__name__)
-
-
-def _normalize_statement(statement: str) -> str:
-    """
-    statementを正規化して比較用に使用
-    
-    Args:
-        statement: クイズのstatement
-        
-    Returns:
-        正規化されたstatement（空白除去、句読点統一、小文字化）
-    """
-    # 空白を除去
-    normalized = re.sub(r'\s+', '', statement)
-    # 句読点を統一（句読点を除去）
-    normalized = normalized.replace('。', '').replace('、', '').replace('.', '').replace(',', '')
-    return normalized.lower()
-
-
-def _get_core_content_key(statement: str) -> str:
-    """
-    コア内容キーを取得（否定語除去後の正規化）
-    
-    重複判定用に、否定語（しない/行わない/禁止/不要/ではない等）を除去した
-    コア内容のみで比較する。これにより「行う/行わない」の単純反転が
-    同一セットに混入しないようにする。
-    
-    Args:
-        statement: クイズのstatement
-        
-    Returns:
-        コア内容キー（否定語除去後の正規化）
-    """
-    # 否定語パターン（優先度順）
-    negation_patterns = [
-        r'しない',
-        r'行わない',
-        r'ではない',
-        r'なくてもよい',
-        r'禁止',
-        r'不要',
-        r'してはいけない',
-        r'行ってはいけない',
-        r'してはならない',
-        r'行ってはならない',
-    ]
-    
-    # 否定語を除去
-    core = statement
-    for pattern in negation_patterns:
-        core = re.sub(pattern, '', core)
-    
-    # 正規化（空白除去、句読点除去、小文字化）
-    normalized = re.sub(r'\s+', '', core)
-    normalized = normalized.replace('。', '').replace('、', '').replace('.', '').replace(',', '')
-    return normalized.lower()
-
-
-def _is_duplicate(new_statement: str, existing_statements: list[str]) -> bool:
-    """
-    新しいstatementが既存のものと重複しているかチェック
-    
-    重複判定は2段階で行う:
-    1. 通常の正規化（空白・句読点除去）で完全一致チェック
-    2. コア内容キー（否定語除去後）で一致チェック（「行う/行わない」の単純反転を検出）
-    
-    Args:
-        new_statement: 新しいstatement
-        existing_statements: 既存のstatementリスト
-        
-    Returns:
-        True: 重複している、False: 重複していない
-    """
-    # 1. 通常の正規化で完全一致チェック
-    normalized_new = _normalize_statement(new_statement)
-    for existing in existing_statements:
-        normalized_existing = _normalize_statement(existing)
-        if normalized_new == normalized_existing:
-            logger.info(f"重複検出（完全一致）: '{new_statement[:50]}...' と '{existing[:50]}...' が重複しています")
-            return True
-    
-    # 2. コア内容キー（否定語除去後）で一致チェック
-    core_key_new = _get_core_content_key(new_statement)
-    for existing in existing_statements:
-        core_key_existing = _get_core_content_key(existing)
-        if core_key_new == core_key_existing and core_key_new:  # 空文字列は除外
-            logger.info(f"重複検出（コア内容一致）: '{new_statement[:50]}...' と '{existing[:50]}...' がコア内容で重複しています")
-            return True
-    
-    return False
-
-
-def _is_citation_duplicate(quiz_citations: list[Citation], used_citation_keys: set) -> bool:
-    """
-    クイズのcitationsが既に使用済みかチェック
-    
-    Args:
-        quiz_citations: クイズのcitationsリスト
-        used_citation_keys: 使用済みcitationキーのセット
-        
-    Returns:
-        True: 重複している（既に使用済みのcitationを含む）、False: 重複していない
-    """
-    for citation in quiz_citations:
-        citation_key = (
-            citation.source,
-            citation.page,
-            citation.quote[:60] if citation.quote else ""
-        )
-        if citation_key in used_citation_keys:
-            # TypeError対策: pageを文字列に変換
-            page_str = str(citation.page) if citation.page is not None else "None"
-            logger.info(
-                f"出題箇所重複検出: '{citation.source}' (p.{page_str}) は既に使用済みです"
-            )
-            return True
-    return False
 
 
 async def generate_quizzes_with_retry(
@@ -167,9 +51,6 @@ async def generate_quizzes_with_retry(
         - attempt_errors: 試行ごとの失敗履歴
         - aggregated_stats: 集計統計情報
     """
-    import random
-    import time
-    
     # 【新戦略】1つのcitationから1問（○のみ）を生成し、使用済みcitationを記録
     # これにより出題箇所の重複を必然的に避ける
     base_max_attempts = settings.quiz_max_attempts
@@ -416,7 +297,7 @@ async def generate_quizzes_with_retry(
                                     continue
                         
                         # statementの重複チェック
-                        if _is_duplicate(selected_quiz.statement, accepted_statements):
+                        if is_duplicate_statement(selected_quiz.statement, accepted_statements):
                             consecutive_duplicates += 1
                             # 【デバッグ】重複クイズのsource情報を出力
                             quiz_sources = [c.source for c in selected_quiz.citations] if selected_quiz.citations else []
@@ -610,160 +491,7 @@ async def generate_quizzes_with_retry(
         accepted_quizzes = accepted_quizzes[:target_count]
     
     # 【固定ルール】4問目と5問目を×問題に固定
-    # 4問目（インデックス3）と5問目（インデックス4）が存在する場合、×問題に変換
-    from app.quiz.mutator import make_false_statement
-    
-    # 4問目を×問題に変換（インデックス3）
-    if len(accepted_quizzes) > 3:
-        quiz_4 = accepted_quizzes[3]
-        # 元のstatementが○問題であることを確認（念のため）
-        if quiz_4.answer_bool:
-            original_statement = quiz_4.statement
-            false_statement = make_false_statement(original_statement)
-            
-            # Mutatorが失敗した場合（元の文と同じ）、代替方法を試す
-            if false_statement == original_statement:
-                logger.info(f"[FIXED_QUESTION] Mutatorが失敗したため、代替方法を試行します: '{original_statement[:50]}...'")
-                
-                # 代替方法1: 文末の否定化を試す（より積極的）
-                alternative_patterns = [
-                    (r"行う。$", "行わない。"),
-                    (r"確認する。$", "確認しない。"),
-                    (r"連絡する。$", "連絡しない。"),
-                    (r"報告する。$", "報告しない。"),
-                    (r"実施する。$", "実施しない。"),
-                    (r"実行する。$", "実行しない。"),
-                    (r"処理する。$", "処理しない。"),
-                    (r"対応する。$", "対応しない。"),
-                    (r"対処する。$", "対処しない。"),
-                    (r"示す。$", "示さない。"),
-                    (r"持つ。$", "持たない。"),
-                    (r"着用する。$", "着用しない。"),
-                    (r"である。$", "ではない。"),
-                    (r"する。$", "しない。"),
-                    (r"できる。$", "できない。"),
-                    (r"される。$", "されない。"),
-                    (r"ある。$", "ない。"),
-                ]
-                
-                for pattern, replacement in alternative_patterns:
-                    if re.search(pattern, original_statement):
-                        false_statement = re.sub(pattern, replacement, original_statement)
-                        if false_statement != original_statement:
-                            logger.info(f"[FIXED_QUESTION] 代替方法で×問題を生成: パターン '{pattern}' を適用")
-                            break
-                
-                # 代替方法2: "必ず"を削除して「行わなくてもよい」に変換
-                if false_statement == original_statement and "必ず" in original_statement:
-                    false_statement = original_statement.replace("必ず", "").replace("  ", " ").strip()
-                    if false_statement != original_statement:
-                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必ず'を削除")
-                
-                # 代替方法3: "必須"を"任意"に変換
-                if false_statement == original_statement and "必須" in original_statement:
-                    false_statement = original_statement.replace("必須", "任意")
-                    if false_statement != original_statement:
-                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必須'を'任意'に変換")
-                
-                # 代替方法4: "必要"を"不要"に変換
-                if false_statement == original_statement and "必要" in original_statement:
-                    false_statement = original_statement.replace("必要", "不要")
-                    if false_statement != original_statement:
-                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必要'を'不要'に変換")
-                
-                # 代替方法5: それでも失敗した場合、文頭に「誤り：」を追加（最後の手段）
-                if false_statement == original_statement:
-                    false_statement = f"誤り：{original_statement}"
-                    logger.warning(f"[FIXED_QUESTION] すべての代替方法が失敗したため、文頭に「誤り：」を追加: '{false_statement[:50]}...'")
-            
-            # ×問題に変換（新しいIDを生成）
-            false_quiz_dict = quiz_4.model_dump() if hasattr(quiz_4, "model_dump") else quiz_4.dict()
-            false_quiz_dict["id"] = str(uuid.uuid4())[:8]
-            false_quiz_dict["statement"] = false_statement
-            false_quiz_dict["answer_bool"] = False
-            false_quiz_dict["explanation"] = f"この文は誤りです。正しくは「{original_statement}」です。{quiz_4.explanation}"
-            
-            # QuizItemSchemaに変換して置き換え
-            accepted_quizzes[3] = QuizItemSchema(**false_quiz_dict)
-            logger.info(f"[FIXED_QUESTION] 4問目を×問題に固定: '{original_statement[:50]}...' -> '{false_statement[:50]}...'")
-        else:
-            logger.info(f"[FIXED_QUESTION] 4問目は既に×問題です: '{quiz_4.statement[:50]}...'")
-    
-    # 5問目を×問題に変換（インデックス4）
-    if len(accepted_quizzes) > 4:
-        quiz_5 = accepted_quizzes[4]
-        # 元のstatementが○問題であることを確認（念のため）
-        if quiz_5.answer_bool:
-            original_statement = quiz_5.statement
-            false_statement = make_false_statement(original_statement)
-            
-            # Mutatorが失敗した場合（元の文と同じ）、代替方法を試す
-            if false_statement == original_statement:
-                logger.info(f"[FIXED_QUESTION] Mutatorが失敗したため、代替方法を試行します: '{original_statement[:50]}...'")
-                
-                # 代替方法1: 文末の否定化を試す（より積極的）
-                alternative_patterns = [
-                    (r"行う。$", "行わない。"),
-                    (r"確認する。$", "確認しない。"),
-                    (r"連絡する。$", "連絡しない。"),
-                    (r"報告する。$", "報告しない。"),
-                    (r"実施する。$", "実施しない。"),
-                    (r"実行する。$", "実行しない。"),
-                    (r"処理する。$", "処理しない。"),
-                    (r"対応する。$", "対応しない。"),
-                    (r"対処する。$", "対処しない。"),
-                    (r"示す。$", "示さない。"),
-                    (r"持つ。$", "持たない。"),
-                    (r"着用する。$", "着用しない。"),
-                    (r"である。$", "ではない。"),
-                    (r"する。$", "しない。"),
-                    (r"できる。$", "できない。"),
-                    (r"される。$", "されない。"),
-                    (r"ある。$", "ない。"),
-                ]
-                
-                for pattern, replacement in alternative_patterns:
-                    if re.search(pattern, original_statement):
-                        false_statement = re.sub(pattern, replacement, original_statement)
-                        if false_statement != original_statement:
-                            logger.info(f"[FIXED_QUESTION] 代替方法で×問題を生成: パターン '{pattern}' を適用")
-                            break
-                
-                # 代替方法2: "必ず"を削除して「行わなくてもよい」に変換
-                if false_statement == original_statement and "必ず" in original_statement:
-                    false_statement = original_statement.replace("必ず", "").replace("  ", " ").strip()
-                    if false_statement != original_statement:
-                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必ず'を削除")
-                
-                # 代替方法3: "必須"を"任意"に変換
-                if false_statement == original_statement and "必須" in original_statement:
-                    false_statement = original_statement.replace("必須", "任意")
-                    if false_statement != original_statement:
-                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必須'を'任意'に変換")
-                
-                # 代替方法4: "必要"を"不要"に変換
-                if false_statement == original_statement and "必要" in original_statement:
-                    false_statement = original_statement.replace("必要", "不要")
-                    if false_statement != original_statement:
-                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必要'を'不要'に変換")
-                
-                # 代替方法5: それでも失敗した場合、文頭に「誤り：」を追加（最後の手段）
-                if false_statement == original_statement:
-                    false_statement = f"誤り：{original_statement}"
-                    logger.warning(f"[FIXED_QUESTION] すべての代替方法が失敗したため、文頭に「誤り：」を追加: '{false_statement[:50]}...'")
-            
-            # ×問題に変換（新しいIDを生成）
-            false_quiz_dict = quiz_5.model_dump() if hasattr(quiz_5, "model_dump") else quiz_5.dict()
-            false_quiz_dict["id"] = str(uuid.uuid4())[:8]
-            false_quiz_dict["statement"] = false_statement
-            false_quiz_dict["answer_bool"] = False
-            false_quiz_dict["explanation"] = f"この文は誤りです。正しくは「{original_statement}」です。{quiz_5.explanation}"
-            
-            # QuizItemSchemaに変換して置き換え
-            accepted_quizzes[4] = QuizItemSchema(**false_quiz_dict)
-            logger.info(f"[FIXED_QUESTION] 5問目を×問題に固定: '{original_statement[:50]}...' -> '{false_statement[:50]}...'")
-        else:
-            logger.info(f"[FIXED_QUESTION] 5問目は既に×問題です: '{quiz_5.statement[:50]}...'")
+    accepted_quizzes = apply_fixed_questions(accepted_quizzes)
     
     # 経過時間を計算
     total_elapsed_time = time.perf_counter() - start_time
