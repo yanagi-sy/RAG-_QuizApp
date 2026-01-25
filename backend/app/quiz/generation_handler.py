@@ -621,6 +621,61 @@ async def generate_quizzes_with_retry(
             original_statement = quiz_4.statement
             false_statement = make_false_statement(original_statement)
             
+            # Mutatorが失敗した場合（元の文と同じ）、代替方法を試す
+            if false_statement == original_statement:
+                logger.info(f"[FIXED_QUESTION] Mutatorが失敗したため、代替方法を試行します: '{original_statement[:50]}...'")
+                
+                # 代替方法1: 文末の否定化を試す（より積極的）
+                alternative_patterns = [
+                    (r"行う。$", "行わない。"),
+                    (r"確認する。$", "確認しない。"),
+                    (r"連絡する。$", "連絡しない。"),
+                    (r"報告する。$", "報告しない。"),
+                    (r"実施する。$", "実施しない。"),
+                    (r"実行する。$", "実行しない。"),
+                    (r"処理する。$", "処理しない。"),
+                    (r"対応する。$", "対応しない。"),
+                    (r"対処する。$", "対処しない。"),
+                    (r"示す。$", "示さない。"),
+                    (r"持つ。$", "持たない。"),
+                    (r"着用する。$", "着用しない。"),
+                    (r"である。$", "ではない。"),
+                    (r"する。$", "しない。"),
+                    (r"できる。$", "できない。"),
+                    (r"される。$", "されない。"),
+                    (r"ある。$", "ない。"),
+                ]
+                
+                for pattern, replacement in alternative_patterns:
+                    if re.search(pattern, original_statement):
+                        false_statement = re.sub(pattern, replacement, original_statement)
+                        if false_statement != original_statement:
+                            logger.info(f"[FIXED_QUESTION] 代替方法で×問題を生成: パターン '{pattern}' を適用")
+                            break
+                
+                # 代替方法2: "必ず"を削除して「行わなくてもよい」に変換
+                if false_statement == original_statement and "必ず" in original_statement:
+                    false_statement = original_statement.replace("必ず", "").replace("  ", " ").strip()
+                    if false_statement != original_statement:
+                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必ず'を削除")
+                
+                # 代替方法3: "必須"を"任意"に変換
+                if false_statement == original_statement and "必須" in original_statement:
+                    false_statement = original_statement.replace("必須", "任意")
+                    if false_statement != original_statement:
+                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必須'を'任意'に変換")
+                
+                # 代替方法4: "必要"を"不要"に変換
+                if false_statement == original_statement and "必要" in original_statement:
+                    false_statement = original_statement.replace("必要", "不要")
+                    if false_statement != original_statement:
+                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必要'を'不要'に変換")
+                
+                # 代替方法5: それでも失敗した場合、文頭に「誤り：」を追加（最後の手段）
+                if false_statement == original_statement:
+                    false_statement = f"誤り：{original_statement}"
+                    logger.warning(f"[FIXED_QUESTION] すべての代替方法が失敗したため、文頭に「誤り：」を追加: '{false_statement[:50]}...'")
+            
             # ×問題に変換（新しいIDを生成）
             false_quiz_dict = quiz_4.model_dump() if hasattr(quiz_4, "model_dump") else quiz_4.dict()
             false_quiz_dict["id"] = str(uuid.uuid4())[:8]
@@ -641,6 +696,61 @@ async def generate_quizzes_with_retry(
         if quiz_5.answer_bool:
             original_statement = quiz_5.statement
             false_statement = make_false_statement(original_statement)
+            
+            # Mutatorが失敗した場合（元の文と同じ）、代替方法を試す
+            if false_statement == original_statement:
+                logger.info(f"[FIXED_QUESTION] Mutatorが失敗したため、代替方法を試行します: '{original_statement[:50]}...'")
+                
+                # 代替方法1: 文末の否定化を試す（より積極的）
+                alternative_patterns = [
+                    (r"行う。$", "行わない。"),
+                    (r"確認する。$", "確認しない。"),
+                    (r"連絡する。$", "連絡しない。"),
+                    (r"報告する。$", "報告しない。"),
+                    (r"実施する。$", "実施しない。"),
+                    (r"実行する。$", "実行しない。"),
+                    (r"処理する。$", "処理しない。"),
+                    (r"対応する。$", "対応しない。"),
+                    (r"対処する。$", "対処しない。"),
+                    (r"示す。$", "示さない。"),
+                    (r"持つ。$", "持たない。"),
+                    (r"着用する。$", "着用しない。"),
+                    (r"である。$", "ではない。"),
+                    (r"する。$", "しない。"),
+                    (r"できる。$", "できない。"),
+                    (r"される。$", "されない。"),
+                    (r"ある。$", "ない。"),
+                ]
+                
+                for pattern, replacement in alternative_patterns:
+                    if re.search(pattern, original_statement):
+                        false_statement = re.sub(pattern, replacement, original_statement)
+                        if false_statement != original_statement:
+                            logger.info(f"[FIXED_QUESTION] 代替方法で×問題を生成: パターン '{pattern}' を適用")
+                            break
+                
+                # 代替方法2: "必ず"を削除して「行わなくてもよい」に変換
+                if false_statement == original_statement and "必ず" in original_statement:
+                    false_statement = original_statement.replace("必ず", "").replace("  ", " ").strip()
+                    if false_statement != original_statement:
+                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必ず'を削除")
+                
+                # 代替方法3: "必須"を"任意"に変換
+                if false_statement == original_statement and "必須" in original_statement:
+                    false_statement = original_statement.replace("必須", "任意")
+                    if false_statement != original_statement:
+                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必須'を'任意'に変換")
+                
+                # 代替方法4: "必要"を"不要"に変換
+                if false_statement == original_statement and "必要" in original_statement:
+                    false_statement = original_statement.replace("必要", "不要")
+                    if false_statement != original_statement:
+                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必要'を'不要'に変換")
+                
+                # 代替方法5: それでも失敗した場合、文頭に「誤り：」を追加（最後の手段）
+                if false_statement == original_statement:
+                    false_statement = f"誤り：{original_statement}"
+                    logger.warning(f"[FIXED_QUESTION] すべての代替方法が失敗したため、文頭に「誤り：」を追加: '{false_statement[:50]}...'")
             
             # ×問題に変換（新しいIDを生成）
             false_quiz_dict = quiz_5.model_dump() if hasattr(quiz_5, "model_dump") else quiz_5.dict()
