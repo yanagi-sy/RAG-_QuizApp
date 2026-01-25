@@ -9,6 +9,7 @@ Quiz生成の再試行ロジック（目標数に達するまで複数回生成�
 import logging
 import re
 import unicodedata
+import uuid
 from typing import Dict, Any
 
 from app.schemas.quiz import QuizGenerateRequest, QuizItem as QuizItemSchema
@@ -607,6 +608,52 @@ async def generate_quizzes_with_retry(
     if len(accepted_quizzes) > target_count:
         logger.info(f"生成数が目標数（{target_count}問）を超えています（{len(accepted_quizzes)}問）。目標数にスライスします。")
         accepted_quizzes = accepted_quizzes[:target_count]
+    
+    # 【固定ルール】4問目と5問目を×問題に固定
+    # 4問目（インデックス3）と5問目（インデックス4）が存在する場合、×問題に変換
+    from app.quiz.mutator import make_false_statement
+    
+    # 4問目を×問題に変換（インデックス3）
+    if len(accepted_quizzes) > 3:
+        quiz_4 = accepted_quizzes[3]
+        # 元のstatementが○問題であることを確認（念のため）
+        if quiz_4.answer_bool:
+            original_statement = quiz_4.statement
+            false_statement = make_false_statement(original_statement)
+            
+            # ×問題に変換（新しいIDを生成）
+            false_quiz_dict = quiz_4.model_dump() if hasattr(quiz_4, "model_dump") else quiz_4.dict()
+            false_quiz_dict["id"] = str(uuid.uuid4())[:8]
+            false_quiz_dict["statement"] = false_statement
+            false_quiz_dict["answer_bool"] = False
+            false_quiz_dict["explanation"] = f"この文は誤りです。正しくは「{original_statement}」です。{quiz_4.explanation}"
+            
+            # QuizItemSchemaに変換して置き換え
+            accepted_quizzes[3] = QuizItemSchema(**false_quiz_dict)
+            logger.info(f"[FIXED_QUESTION] 4問目を×問題に固定: '{original_statement[:50]}...' -> '{false_statement[:50]}...'")
+        else:
+            logger.info(f"[FIXED_QUESTION] 4問目は既に×問題です: '{quiz_4.statement[:50]}...'")
+    
+    # 5問目を×問題に変換（インデックス4）
+    if len(accepted_quizzes) > 4:
+        quiz_5 = accepted_quizzes[4]
+        # 元のstatementが○問題であることを確認（念のため）
+        if quiz_5.answer_bool:
+            original_statement = quiz_5.statement
+            false_statement = make_false_statement(original_statement)
+            
+            # ×問題に変換（新しいIDを生成）
+            false_quiz_dict = quiz_5.model_dump() if hasattr(quiz_5, "model_dump") else quiz_5.dict()
+            false_quiz_dict["id"] = str(uuid.uuid4())[:8]
+            false_quiz_dict["statement"] = false_statement
+            false_quiz_dict["answer_bool"] = False
+            false_quiz_dict["explanation"] = f"この文は誤りです。正しくは「{original_statement}」です。{quiz_5.explanation}"
+            
+            # QuizItemSchemaに変換して置き換え
+            accepted_quizzes[4] = QuizItemSchema(**false_quiz_dict)
+            logger.info(f"[FIXED_QUESTION] 5問目を×問題に固定: '{original_statement[:50]}...' -> '{false_statement[:50]}...'")
+        else:
+            logger.info(f"[FIXED_QUESTION] 5問目は既に×問題です: '{quiz_5.statement[:50]}...'")
     
     # 経過時間を計算
     total_elapsed_time = time.perf_counter() - start_time
