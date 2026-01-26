@@ -260,9 +260,9 @@ class Settings(BaseSettings):
         description="Gemini APIキー"
     )
     gemini_model: str = Field(
-        default="gemini-pro",
+        default="gemini-2.5-flash-lite",
         alias="GEMINI_MODEL",
-        description="使用するGeminiモデル名"
+        description="使用するGeminiモデル名（gemini-2.5-flash-lite, gemini-2.5-flash, gemini-2.5-pro など）"
     )
     gemini_timeout_sec: int = Field(
         default=120,

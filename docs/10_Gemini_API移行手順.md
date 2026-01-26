@@ -293,7 +293,7 @@ def get_gemini_client() -> GeminiClient:
         description="Gemini APIキー"
     )
     gemini_model: str = Field(
-        default="gemini-pro",
+        default="gemini-2.5-flash-lite",
         alias="GEMINI_MODEL",
         description="使用するGeminiモデル名"
     )
@@ -520,8 +520,9 @@ LLM_PROVIDER=ollama
 
 ### 推奨モデル
 
-- **QA機能**: `gemini-pro`（汎用性が高い）
-- **Quiz生成**: `gemini-pro`（JSON生成に適している）
+- **QA機能**: `gemini-2.5-flash-lite`（高速でRPM制限が緩い）
+- **Quiz生成**: `gemini-2.5-flash-lite`（JSON生成に適している、推奨）
+- **高品質が必要な場合**: `gemini-2.5-pro`（より高精度だがRPM制限が厳しい）
 
 ---
 
