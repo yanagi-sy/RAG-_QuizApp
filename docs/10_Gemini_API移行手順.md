@@ -51,7 +51,7 @@ Gemini APIに移行する場合も、同じ`LLMClient`インターフェース�
 
 ### 1.2 環境変数に設定
 
-`.env`ファイルに以下を追加：
+**`backend/.env`ファイル**に以下を追加：
 
 ```env
 # Gemini API設定
@@ -59,7 +59,23 @@ GEMINI_API_KEY=your_api_key_here
 LLM_PROVIDER=gemini  # ollama または gemini
 ```
 
-**注意**: APIキーは機密情報のため、`.gitignore`に`.env`が含まれていることを確認してください。
+**具体的な手順:**
+1. `backend/.env`ファイルを開く（テキストエディタで）
+2. ファイルの末尾に上記の2行を追加
+3. `your_api_key_here`の部分を、ステップ1.1で取得したAPIキーに置き換える
+4. ファイルを保存
+
+**例:**
+```env
+# Gemini API設定
+GEMINI_API_KEY=AIzaSyAbc123Xyz789...（実際のAPIキー）
+LLM_PROVIDER=gemini
+```
+
+**注意**: 
+- APIキーは機密情報のため、`.gitignore`に`.env`が含まれていることを確認してください（既に含まれています）
+- APIキーをGitにコミットしないよう注意してください
+- `backend/.env`ファイルは既に存在しているので、そのファイルに追加してください
 
 ---
 
