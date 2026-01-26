@@ -32,11 +32,14 @@ def _convert_to_false_statement_with_fallback(original_statement: str) -> str:
     5. 失敗した場合、代替方法4: "必要"を"不要"に変換
     6. すべて失敗した場合、代替方法5: 文頭に「誤り：」を追加（最後の手段）
     
+    【重要】変換後の文が元の文と異なることを必ず確認します。
+    同じ場合は、必ず誤った内容になるように強制的に変換します。
+    
     Args:
         original_statement: 元の○問題のstatement（正しい断言文）
         
     Returns:
-        変換された×問題のstatement（誤った断言文）
+        変換された×問題のstatement（誤った断言文、必ず元の文と異なる）
         
     Example:
         "地震時は身を守る行動をとる。" → "地震時は身を守る行動をとらない。"
@@ -66,6 +69,24 @@ def _convert_to_false_statement_with_fallback(original_statement: str) -> str:
             (r"できる。$", "できない。"),
             (r"される。$", "されない。"),
             (r"ある。$", "ない。"),
+            # より多くのパターンを追加
+            (r"行う$", "行わない"),
+            (r"確認する$", "確認しない"),
+            (r"連絡する$", "連絡しない"),
+            (r"報告する$", "報告しない"),
+            (r"実施する$", "実施しない"),
+            (r"実行する$", "実行しない"),
+            (r"処理する$", "処理しない"),
+            (r"対応する$", "対応しない"),
+            (r"対処する$", "対処しない"),
+            (r"示す$", "示さない"),
+            (r"持つ$", "持たない"),
+            (r"着用する$", "着用しない"),
+            (r"である$", "ではない"),
+            (r"する$", "しない"),
+            (r"できる$", "できない"),
+            (r"される$", "されない"),
+            (r"ある$", "ない"),
         ]
         
         for pattern, replacement in alternative_patterns:
@@ -93,10 +114,51 @@ def _convert_to_false_statement_with_fallback(original_statement: str) -> str:
             if false_statement != original_statement:
                 logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必要'を'不要'に変換")
         
+        # 代替方法5: より積極的な否定化パターン
+        if false_statement == original_statement:
+            # "〜する必要がある" → "〜する必要がない"
+            if "必要がある" in original_statement:
+                false_statement = original_statement.replace("必要がある", "必要がない")
+                if false_statement != original_statement:
+                    logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '必要がある'を'必要がない'に変換")
+        
+        if false_statement == original_statement:
+            # "〜しなければならない" → "〜しなくてもよい"
+            if "しなければならない" in original_statement:
+                false_statement = original_statement.replace("しなければならない", "しなくてもよい")
+                if false_statement != original_statement:
+                    logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: 'しなければならない'を'しなくてもよい'に変換")
+        
+        if false_statement == original_statement:
+            # "〜すべき" → "〜すべきではない"
+            if "すべき" in original_statement and "すべきではない" not in original_statement:
+                false_statement = original_statement.replace("すべき", "すべきではない")
+                if false_statement != original_statement:
+                    logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: 'すべき'を'すべきではない'に変換")
+        
         # 代替方法5: それでも失敗した場合、文頭に「誤り：」を追加（最後の手段）
         if false_statement == original_statement:
             false_statement = f"誤り：{original_statement}"
             logger.warning(f"[FIXED_QUESTION] すべての代替方法が失敗したため、文頭に「誤り：」を追加: '{false_statement[:50]}...'")
+    
+    # 【重要】最終チェック: 変換後の文が元の文と異なることを確認
+    # 同じ場合は、必ず誤った内容になるように強制的に変換
+    if false_statement == original_statement:
+        # 強制的に誤った文を生成（文頭に「誤り：」を追加）
+        false_statement = f"誤り：{original_statement}"
+        logger.error(
+            f"[FIXED_QUESTION] 変換が完全に失敗したため、強制的に「誤り：」を追加: "
+            f"'{original_statement[:50]}...' -> '{false_statement[:50]}...'"
+        )
+    
+    # 変換後の文が元の文と異なることを最終確認
+    if false_statement == original_statement:
+        # それでも同じ場合は、文末に「（誤り）」を追加
+        false_statement = f"{original_statement}（誤り）"
+        logger.error(
+            f"[FIXED_QUESTION] 最終手段: 文末に「（誤り）」を追加: "
+            f"'{original_statement[:50]}...' -> '{false_statement[:50]}...'"
+        )
     
     return false_statement
 
@@ -130,6 +192,16 @@ def convert_quiz_to_false(quiz: QuizItemSchema, question_index: int) -> QuizItem
     original_statement = quiz.statement
     false_statement = _convert_to_false_statement_with_fallback(original_statement)
     
+    # 【重要】変換後の文が元の文と異なることを最終確認
+    # 同じ場合は、必ず誤った内容になるように強制的に変換
+    if false_statement == original_statement:
+        # 強制的に誤った文を生成（文頭に「誤り：」を追加）
+        false_statement = f"誤り：{original_statement}"
+        logger.error(
+            f"[FIXED_QUESTION] convert_quiz_to_false: 変換が完全に失敗したため、強制的に「誤り：」を追加: "
+            f"'{original_statement[:50]}...' -> '{false_statement[:50]}...'"
+        )
+    
     # ×問題に変換（新しいIDを生成）
     false_quiz_dict = quiz.model_dump() if hasattr(quiz, "model_dump") else quiz.dict()
     false_quiz_dict["id"] = str(uuid.uuid4())[:8]
@@ -137,9 +209,22 @@ def convert_quiz_to_false(quiz: QuizItemSchema, question_index: int) -> QuizItem
     false_quiz_dict["answer_bool"] = False
     false_quiz_dict["explanation"] = f"この文は誤りです。正しくは「{original_statement}」です。{quiz.explanation}"
     
+    # 【最終確認】変換後のstatementが元のstatementと異なることを確認
+    if false_quiz_dict["statement"] == original_statement:
+        logger.error(
+            f"[FIXED_QUESTION] 重大なエラー: 変換後のstatementが元のstatementと同じです。"
+            f"question_index={question_index}, original='{original_statement[:50]}...'"
+        )
+        # それでも同じ場合は、文末に「（誤り）」を追加
+        false_quiz_dict["statement"] = f"{original_statement}（誤り）"
+    
     # QuizItemSchemaに変換して返す
     converted_quiz = QuizItemSchema(**false_quiz_dict)
-    logger.info(f"[FIXED_QUESTION] {question_index+1}問目を×問題に固定: '{original_statement[:50]}...' -> '{false_statement[:50]}...'")
+    logger.info(
+        f"[FIXED_QUESTION] {question_index+1}問目を×問題に固定: "
+        f"'{original_statement[:50]}...' -> '{converted_quiz.statement[:50]}...' "
+        f"(answer_bool={converted_quiz.answer_bool})"
+    )
     
     return converted_quiz
 
