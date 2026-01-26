@@ -6,8 +6,10 @@ Quiz生成の再試行ロジック（目標数に達するまで複数回生成�
 - 試行ごとに batch で複数 citation を処理。規定数に達するか max_attempts まで繰り返す
 - 重複・source不一致は除外。banned_statements で既出をLLMに伝え多様性を確保
 """
+import asyncio
 import logging
 import random
+import re
 import time
 import unicodedata
 
@@ -17,6 +19,7 @@ from app.quiz.generator import generate_and_validate_quizzes
 from app.quiz.duplicate_checker import is_duplicate_statement
 from app.quiz.fixed_question_converter import apply_fixed_questions
 from app.core.settings import settings
+from app.llm.base import LLMInternalError
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -249,7 +252,9 @@ async def generate_quizzes_with_retry(
                 
                 generation_tasks.append((task, single_citation, citation_idx))
             
-            # 並列実行
+            # 並列実行（429エラー対応のため、順次実行に変更）
+            # 注意: 429エラーが発生した場合、並列実行だと複数のリクエストが同時に429エラーになる可能性があるため、
+            # 順次実行にしてエラーを適切に処理する
             for task, single_citation, citation_idx in generation_tasks:
                 try:
                     quiz_accepted, quiz_rejected, quiz_attempt_errors, quiz_stats = await task
@@ -393,6 +398,39 @@ async def generate_quizzes_with_retry(
                         logger.warning(
                             f"[GENERATION_RETRY] citation {citation_idx+1}/{batch_size}: 生成失敗（○が生成されませんでした）"
                         )
+                except LLMInternalError as e:
+                    # 429エラー（クォータ制限）を検出
+                    error_message = str(e)
+                    if "クォータ制限" in error_message or "429" in error_message or "Quota exceeded" in error_message:
+                        # エラーメッセージからretry_delayを抽出
+                        retry_delay = None
+                        retry_delay_match = re.search(r'推奨待機時間: ([\d.]+)秒', error_message)
+                        if retry_delay_match:
+                            retry_delay = float(retry_delay_match.group(1))
+                        else:
+                            # エラーメッセージから直接抽出を試みる
+                            retry_delay_match = re.search(r'Please retry in ([\d.]+)s', error_message)
+                            if retry_delay_match:
+                                retry_delay = float(retry_delay_match.group(1))
+                        
+                        if retry_delay:
+                            logger.warning(
+                                f"[GENERATION_RETRY] クォータ制限エラー検出: {error_message[:200]}... "
+                                f"待機時間: {retry_delay:.1f}秒"
+                            )
+                            # 待機時間を追加（最大60秒）
+                            wait_time = min(retry_delay, 60.0)
+                            await asyncio.sleep(wait_time)
+                            logger.info(f"[GENERATION_RETRY] 待機完了: {wait_time:.1f}秒経過")
+                    
+                    # エラーをattempt_errorsに記録
+                    batch_attempt_errors.append({
+                        "attempt": attempts,
+                        "stage": "generation",
+                        "type": "llm_internal_error",
+                        "message": error_message,
+                    })
+                    logger.error(f"[GENERATION_RETRY] citation {citation_idx+1}/{batch_size} でLLMエラー: {error_message}")
                 except Exception as e:
                     logger.error(f"[GENERATION_RETRY] citation {citation_idx+1}/{batch_size} でエラー: {type(e).__name__}: {e}")
             
@@ -473,6 +511,50 @@ async def generate_quizzes_with_retry(
                     aggregated_stats[key] = value
             
             
+        except LLMInternalError as e:
+            # 429エラー（クォータ制限）を検出
+            error_message = str(e)
+            if "クォータ制限" in error_message or "429" in error_message or "Quota exceeded" in error_message:
+                # エラーメッセージからretry_delayを抽出
+                retry_delay = None
+                retry_delay_match = re.search(r'推奨待機時間: ([\d.]+)秒', error_message)
+                if retry_delay_match:
+                    retry_delay = float(retry_delay_match.group(1))
+                else:
+                    # エラーメッセージから直接抽出を試みる
+                    retry_delay_match = re.search(r'Please retry in ([\d.]+)s', error_message)
+                    if retry_delay_match:
+                        retry_delay = float(retry_delay_match.group(1))
+                
+                if retry_delay:
+                    logger.warning(
+                        f"[GENERATION_RETRY] クォータ制限エラー検出（外側）: {error_message[:200]}... "
+                        f"待機時間: {retry_delay:.1f}秒"
+                    )
+                    # 待機時間を追加（最大60秒）
+                    wait_time = min(retry_delay, 60.0)
+                    await asyncio.sleep(wait_time)
+                    logger.info(f"[GENERATION_RETRY] 待機完了: {wait_time:.1f}秒経過")
+            
+            # エラー情報を記録
+            all_attempt_errors.append({
+                "attempt": attempts,
+                "stage": "generation",
+                "type": "llm_internal_error",
+                "message": error_message,
+            })
+            
+            logger.error(f"[GENERATION_RETRY] attempt={attempts} でLLMエラー: {error_message}")
+            
+            # タイムアウトチェック
+            elapsed_time = time.perf_counter() - start_time
+            if elapsed_time > max_total_time_sec:
+                logger.warning(f"[GENERATION_RETRY] タイムアウトのため終了: {elapsed_time:.1f}秒経過")
+                break
+            
+            # 最大試行回数に達した場合は終了
+            if attempts >= max_attempts:
+                break
         except Exception as e:
             logger.error(f"[GENERATION_RETRY] attempt={attempts} でエラー: {type(e).__name__}: {e}")
             

@@ -29,12 +29,13 @@ export default function DifficultyPicker({
   };
 
   // NETWORK_ERROR / TIMEOUT / INTERNAL_ERROR の場合のみ再試行ボタンを表示
+  // QUOTA_EXCEEDEDは時間が経たないと解決しないため、再試行ボタンは表示しない
   const isRetryable = 
     error && (
       error.code === "NETWORK_ERROR" || 
       error.code === "TIMEOUT" || 
       error.code === "INTERNAL_ERROR"
-    );
+    ) && error.code !== "QUOTA_EXCEEDED";
 
   return (
     <div className="space-y-4">

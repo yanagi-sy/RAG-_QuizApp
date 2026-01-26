@@ -8,10 +8,13 @@ Gemini API LLMクライアント（Google Gemini APIとの通信）
 """
 import asyncio
 import logging
+import re
+import time
 from functools import lru_cache
 from typing import List, Dict, Any
 
 import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
 
 from app.core.settings import settings
 from app.llm.base import LLMClient, LLMTimeoutError, LLMInternalError
@@ -126,17 +129,64 @@ class GeminiClient:
                     f"temperature={settings.quiz_gemini_temperature}"
                 )
             
-            # Gemini APIを呼び出し
+            # Gemini APIを呼び出し（リトライロジック付き）
             # 注意: Gemini APIは非同期を直接サポートしていないため、同期呼び出しをasyncioでラップ
+            max_retries = 3  # 最大リトライ回数
+            retry_delay_base = 1.0  # 基本待機時間（秒）
+            
             def _generate():
-                try:
-                    response = self.model.generate_content(
-                        gemini_messages,
-                        generation_config=generation_config if generation_config else None,
-                    )
-                    return response.text
-                except Exception as e:
-                    raise LLMInternalError(f"Gemini API呼び出しエラー: {str(e)}")
+                last_error = None
+                for attempt in range(max_retries):
+                    try:
+                        response = self.model.generate_content(
+                            gemini_messages,
+                            generation_config=generation_config if generation_config else None,
+                        )
+                        return response.text
+                    except google_exceptions.ResourceExhausted as e:
+                        # 429エラー（クォータ制限）の場合
+                        last_error = e
+                        error_str = str(e)
+                        
+                        # エラーメッセージからretry_delayを抽出
+                        retry_delay = None
+                        retry_delay_match = re.search(r'Please retry in ([\d.]+)s', error_str)
+                        if retry_delay_match:
+                            retry_delay = float(retry_delay_match.group(1))
+                        
+                        # クォータ制限の詳細を抽出
+                        quota_info = ""
+                        if "Quota exceeded" in error_str:
+                            quota_match = re.search(r'limit: (\d+)', error_str)
+                            if quota_match:
+                                limit = quota_match.group(1)
+                                quota_info = f"（1日のリクエスト上限: {limit}回）"
+                        
+                        if attempt < max_retries - 1:
+                            # リトライ可能な場合
+                            wait_time = retry_delay if retry_delay else retry_delay_base * (2 ** attempt)
+                            logger.warning(
+                                f"Gemini API クォータ制限エラー（429）: {error_str[:200]}... "
+                                f"リトライ待機: {wait_time:.1f}秒後（試行 {attempt + 1}/{max_retries}）{quota_info}"
+                            )
+                            time.sleep(wait_time)
+                        else:
+                            # 最終試行でも失敗した場合
+                            error_message = (
+                                f"Gemini APIのクォータ制限に達しました{quota_info}。"
+                                f"しばらく時間をおいてから再度お試しください。"
+                            )
+                            if retry_delay:
+                                error_message += f" 推奨待機時間: {retry_delay:.0f}秒"
+                            raise LLMInternalError(error_message)
+                    except Exception as e:
+                        # その他のエラーは即座に投げる
+                        raise LLMInternalError(f"Gemini API呼び出しエラー: {str(e)}")
+                
+                # ここに到達することはないが、型チェックのために
+                if last_error:
+                    raise LLMInternalError(f"Gemini API呼び出しエラー: {str(last_error)}")
+                raise LLMInternalError("Gemini API呼び出しに失敗しました")
             
             # タイムアウト付きで実行
             answer = await asyncio.wait_for(

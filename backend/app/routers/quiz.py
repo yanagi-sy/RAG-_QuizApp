@@ -33,6 +33,8 @@ from app.quiz.retrieval import retrieve_for_quiz
 from app.quiz.generation_handler import generate_quizzes_with_retry
 from app.quiz.debug_builder import build_error_response, build_debug_response
 from app.quiz import store as quiz_store
+from app.llm.base import LLMInternalError
+from app.core.errors import raise_internal_error
 
 # ロガー設定
 logger = logging.getLogger(__name__)
@@ -179,9 +181,26 @@ async def generate_quizzes_endpoint(request: QuizGenerateRequest) -> QuizGenerat
     # LLMでクイズを生成（バリデーション付き）
     t_llm_start = time.perf_counter()
     logger.info(f"[LLM:START] request_id={request_id}, target_count={target_count}")
-    accepted_quizzes, rejected_items, error_info, attempts, attempt_errors, aggregated_stats = await generate_quizzes_with_retry(
-        request, target_count, citations, request_id
-    )
+    try:
+        accepted_quizzes, rejected_items, error_info, attempts, attempt_errors, aggregated_stats = await generate_quizzes_with_retry(
+            request, target_count, citations, request_id
+        )
+    except LLMInternalError as e:
+        # 429エラー（クォータ制限）を検出
+        error_message = str(e)
+        if "クォータ制限" in error_message or "429" in error_message or "Quota exceeded" in error_message:
+            logger.error(f"[QUIZ_GENERATE] Gemini APIクォータ制限エラー: {error_message}")
+            # ユーザーに分かりやすいエラーメッセージを返す
+            # FastAPIのHTTPExceptionはdetailをそのまま返すため、errorオブジェクトを含める
+            from app.core.errors import AppError
+            raise AppError(
+                "INTERNAL_ERROR",  # 既存のエラーコードを使用（QUOTA_EXCEEDEDはフロントで処理）
+                error_message
+            )
+        else:
+            # その他のLLMエラー
+            logger.error(f"[QUIZ_GENERATE] LLM内部エラー: {error_message}")
+            raise_internal_error(f"クイズ生成中にエラーが発生しました: {error_message}")
     t_llm_ms = (time.perf_counter() - t_llm_start) * 1000
     logger.info(f"[LLM:DONE] {t_llm_ms:.1f}ms, accepted={len(accepted_quizzes)}, attempts={attempts}")
     

@@ -72,8 +72,17 @@ async function fetchApi<T>(
       "message" in data.error
     ) {
       const errorData = data as ApiErrorResponse;
+      let errorCode = errorData.error.code;
+      // エラーメッセージに「クォータ制限」が含まれている場合、QUOTA_EXCEEDEDとして扱う
+      if (
+        errorData.error.message.includes("クォータ制限") ||
+        errorData.error.message.includes("Quota exceeded") ||
+        errorData.error.message.includes("429")
+      ) {
+        errorCode = "QUOTA_EXCEEDED";
+      }
       throw new ApiError(
-        errorData.error.code,
+        errorCode,
         errorData.error.message,
         response.status
       );

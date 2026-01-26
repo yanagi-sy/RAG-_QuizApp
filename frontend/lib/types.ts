@@ -4,7 +4,7 @@
  * バックエンドのスキーマと対応させ、型安全にAPIを利用する。
  */
 // エラーコード型
-export type ErrorCode = "INVALID_INPUT" | "NOT_FOUND" | "TIMEOUT" | "INTERNAL_ERROR" | "NETWORK_ERROR";
+export type ErrorCode = "INVALID_INPUT" | "NOT_FOUND" | "TIMEOUT" | "INTERNAL_ERROR" | "NETWORK_ERROR" | "QUOTA_EXCEEDED";
 
 // ApiErrorクラス
 export class ApiError extends Error {
