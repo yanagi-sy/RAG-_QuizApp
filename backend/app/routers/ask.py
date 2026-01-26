@@ -26,7 +26,7 @@ from app.search.index import search_chunks  # NEW: keyword検索用
 from app.search.reranker import rerank_documents  # NEW: Cross-Encoder
 from app.llm.base import LLMInternalError
 from app.llm.base import LLMTimeoutError
-from app.llm.ollama import get_ollama_client
+from app.llm import get_llm_client
 from app.llm.prompt import build_messages
 
 # ロガー設定
@@ -93,8 +93,8 @@ async def ask_question(request: AskRequest) -> AskResponse:
     # LLMで回答生成を試みる
     answer = ""
     try:
-        # LLMクライアントを取得
-        llm_client = get_ollama_client()
+        # LLMクライアントを取得（設定に応じてOllamaまたはGeminiを選択）
+        llm_client = get_llm_client()
 
         # プロンプトを構築
         messages = build_messages(

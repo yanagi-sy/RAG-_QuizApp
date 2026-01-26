@@ -15,7 +15,7 @@ from app.core.settings import settings
 from app.schemas.quiz import QuizItem as QuizItemSchema
 from app.schemas.common import Citation
 from app.llm.base import LLMInternalError, LLMTimeoutError
-from app.llm.ollama import get_ollama_client
+from app.llm import get_llm_client
 from app.llm.prompt import build_quiz_generation_messages, build_quiz_json_fix_messages
 from app.quiz.parser import parse_quiz_json
 from app.quiz.validator import validate_quiz_item
@@ -435,8 +435,8 @@ async def generate_quizzes_with_llm(
             return raw
         return str(raw)
     
-    # LLMクライアントを取得
-    llm_client = get_ollama_client()
+    # LLMクライアントを取得（設定に応じてOllamaまたはGeminiを選択）
+    llm_client = get_llm_client()
     
     # プロンプトを構築（通常生成用）、統計情報も取得
     ret = build_quiz_generation_messages(

@@ -253,8 +253,46 @@ class Settings(BaseSettings):
         description="Quiz生成時に format=json を強制（JSON安定性向上、○のみ生成で推奨）"
     )
 
-    # 将来のGEMINI APIキー（未使用）
-    # gemini_api_key: str = ""
+    # Gemini API設定
+    gemini_api_key: str = Field(
+        default="",
+        alias="GEMINI_API_KEY",
+        description="Gemini APIキー"
+    )
+    gemini_model: str = Field(
+        default="gemini-pro",
+        alias="GEMINI_MODEL",
+        description="使用するGeminiモデル名"
+    )
+    gemini_timeout_sec: int = Field(
+        default=120,
+        alias="GEMINI_TIMEOUT_SEC",
+        description="Gemini API呼び出しのタイムアウト秒数"
+    )
+    
+    # Quiz専用Gemini最適化設定
+    quiz_gemini_model: str | None = Field(
+        default=None,
+        alias="QUIZ_GEMINI_MODEL",
+        description="Quiz専用Geminiモデル名（未指定なら gemini_model を使用）"
+    )
+    quiz_gemini_max_output_tokens: int = Field(
+        default=2048,
+        alias="QUIZ_GEMINI_MAX_OUTPUT_TOKENS",
+        description="Quiz生成時の最大出力トークン数"
+    )
+    quiz_gemini_temperature: float = Field(
+        default=0.2,
+        alias="QUIZ_GEMINI_TEMPERATURE",
+        description="Quiz生成時の temperature"
+    )
+    
+    # LLMプロバイダー選択
+    llm_provider: str = Field(
+        default="ollama",
+        alias="LLM_PROVIDER",
+        description="LLMプロバイダー（ollama または gemini）"
+    )
 
     # Pydantic v2の設定（Configクラスの代わりにmodel_configを使用）
     model_config = SettingsConfigDict(
