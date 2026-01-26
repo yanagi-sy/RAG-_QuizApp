@@ -136,6 +136,7 @@ rag-quiz-app/
 
 - **[技術スタックとデータフロー](./docs/09_技術スタックとデータフロー.md)** — 技術解説・QA/Quizデータフロー・各ファイル概要
 - [Quiz安定化実装](./docs/08_Quiz安定化実装.md) — 3層ガード（プロンプト・パース・修復）等
+- **[Gemini API移行手順](./docs/10_Gemini_API移行手順.md)** — OllamaからGemini APIへの移行手順
 
 ## 検索・QA・Quiz概要
 
