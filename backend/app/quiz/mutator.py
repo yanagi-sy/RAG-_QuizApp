@@ -54,27 +54,21 @@ NEGATION_RULES = [
     ("直ちに", "後で"),
     ("即座に", "後で"),
     
-    # 動詞の否定形（より多くのパターンに対応）
-    ("行う", "行わない"),
-    ("確認する", "確認しない"),
-    ("連絡する", "連絡しない"),
-    ("報告する", "報告しない"),
-    ("実施する", "実施しない"),
-    ("実行する", "実行しない"),
-    ("処理する", "処理しない"),
-    ("対応する", "対応しない"),
-    ("検討する", "検討しない"),
-    ("検証する", "検証しない"),
-    ("記録する", "記録しない"),
-    ("保存する", "保存しない"),
-    ("送信する", "送信しない"),
-    ("受信する", "受信しない"),
-    ("作成する", "作成しない"),
-    ("更新する", "更新しない"),
-    ("削除する", "削除しない"),
-    ("取得する", "取得しない"),
-    ("設定する", "設定しない"),
-    ("変更する", "変更しない"),
+    # 動作の変更（否定形ではなく、より自然な誤り）
+    ("確認する", "確認を後回しにする"),
+    ("連絡する", "連絡を後回しにする"),
+    ("報告する", "報告を後回しにする"),
+    ("対応する", "対応を後回しにする"),
+    ("対処する", "対処を後回しにする"),
+    ("実施する", "実施を後回しにする"),
+    ("実行する", "実行を後回しにする"),
+    ("処理する", "処理を後回しにする"),
+    ("行う", "後回しにする"),
+    
+    # 対象の変更
+    ("全員", "一部"),
+    ("すべての", "一部の"),
+    ("全ての", "一部の"),
     
     # 形容詞・名詞の否定形
     ("必要である", "不要である"),
@@ -136,34 +130,40 @@ def make_false_statement(statement: str) -> str:
     # どのルールにも該当しなかった場合
     logger.warning(f"Mutator失敗: 変換ルールが見つかりませんでした: {statement[:50]}")
     
-    # 最後の手段: 否定化（より多くのパターンに対応）
-    # "である" → "ではない", "する" → "しない" など
-    if statement.endswith("である。"):
-        return statement[:-4] + "ではない。"
+    # 最後の手段: より自然な誤りを生成（否定形は避ける）
+    # 動作を「後回しにする」に変更
+    if statement.endswith("確認する。"):
+        return statement[:-5] + "確認を後回しにする。"
+    elif statement.endswith("連絡する。"):
+        return statement[:-5] + "連絡を後回しにする。"
+    elif statement.endswith("報告する。"):
+        return statement[:-5] + "報告を後回しにする。"
+    elif statement.endswith("実施する。"):
+        return statement[:-5] + "実施を後回しにする。"
+    elif statement.endswith("実行する。"):
+        return statement[:-5] + "実行を後回しにする。"
+    elif statement.endswith("処理する。"):
+        return statement[:-5] + "処理を後回しにする。"
+    elif statement.endswith("対応する。"):
+        return statement[:-5] + "対応を後回しにする。"
+    elif statement.endswith("対処する。"):
+        return statement[:-5] + "対処を後回しにする。"
+    elif statement.endswith("行う。"):
+        return statement[:-3] + "後回しにする。"
     elif statement.endswith("する。"):
-        return statement[:-3] + "しない。"
+        # 動詞を抽出して「後回しにする」に変更
+        verb_match = re.search(r"(.+?)する。$", statement)
+        if verb_match:
+            verb = verb_match.group(1)
+            return statement[:-len(verb)-3] + f"{verb}を後回しにする。"
     elif statement.endswith("できる。"):
         return statement[:-4] + "できない。"
     elif statement.endswith("される。"):
         return statement[:-4] + "されない。"
+    elif statement.endswith("である。"):
+        return statement[:-4] + "ではない。"
     elif statement.endswith("ある。"):
         return statement[:-3] + "ない。"
-    elif statement.endswith("行う。"):
-        return statement[:-3] + "行わない。"
-    elif statement.endswith("確認する。"):
-        return statement[:-5] + "確認しない。"
-    elif statement.endswith("連絡する。"):
-        return statement[:-5] + "連絡しない。"
-    elif statement.endswith("報告する。"):
-        return statement[:-5] + "報告しない。"
-    elif statement.endswith("実施する。"):
-        return statement[:-5] + "実施しない。"
-    elif statement.endswith("実行する。"):
-        return statement[:-5] + "実行しない。"
-    elif statement.endswith("処理する。"):
-        return statement[:-5] + "処理しない。"
-    elif statement.endswith("対応する。"):
-        return statement[:-5] + "対応しない。"
     elif "必ず" in statement:
         # "必ず"を含む場合は削除して「行わなくてもよい」に変換
         # ただし、「必ず持つ」「必ず携帯する」などの特定パターンは既に処理済み

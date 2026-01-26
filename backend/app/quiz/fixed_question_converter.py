@@ -50,43 +50,39 @@ def _convert_to_false_statement_with_fallback(original_statement: str) -> str:
     if false_statement == original_statement:
         logger.info(f"[FIXED_QUESTION] Mutatorが失敗したため、代替方法を試行します: '{original_statement[:50]}...'")
         
-        # 代替方法1: 文末の否定化を試す（より積極的）
+        # 代替方法1: より自然な誤りを生成（否定形は避ける）
         alternative_patterns = [
-            (r"行う。$", "行わない。"),
-            (r"確認する。$", "確認しない。"),
-            (r"連絡する。$", "連絡しない。"),
-            (r"報告する。$", "報告しない。"),
-            (r"実施する。$", "実施しない。"),
-            (r"実行する。$", "実行しない。"),
-            (r"処理する。$", "処理しない。"),
-            (r"対応する。$", "対応しない。"),
-            (r"対処する。$", "対処しない。"),
-            (r"示す。$", "示さない。"),
-            (r"持つ。$", "持たない。"),
-            (r"着用する。$", "着用しない。"),
-            (r"である。$", "ではない。"),
-            (r"する。$", "しない。"),
-            (r"できる。$", "できない。"),
-            (r"される。$", "されない。"),
-            (r"ある。$", "ない。"),
-            # より多くのパターンを追加
-            (r"行う$", "行わない"),
-            (r"確認する$", "確認しない"),
-            (r"連絡する$", "連絡しない"),
-            (r"報告する$", "報告しない"),
-            (r"実施する$", "実施しない"),
-            (r"実行する$", "実行しない"),
-            (r"処理する$", "処理しない"),
-            (r"対応する$", "対応しない"),
-            (r"対処する$", "対処しない"),
-            (r"示す$", "示さない"),
-            (r"持つ$", "持たない"),
-            (r"着用する$", "着用しない"),
-            (r"である$", "ではない"),
-            (r"する$", "しない"),
-            (r"できる$", "できない"),
-            (r"される$", "されない"),
-            (r"ある$", "ない"),
+            # 動作を「後回しにする」に変更
+            (r"確認する。$", "確認を後回しにする。"),
+            (r"連絡する。$", "連絡を後回しにする。"),
+            (r"報告する。$", "報告を後回しにする。"),
+            (r"実施する。$", "実施を後回しにする。"),
+            (r"実行する。$", "実行を後回しにする。"),
+            (r"処理する。$", "処理を後回しにする。"),
+            (r"対応する。$", "対応を後回しにする。"),
+            (r"対処する。$", "対処を後回しにする。"),
+            (r"行う。$", "後回しにする。"),
+            # 対象の変更
+            (r"全員", "一部"),
+            (r"すべての", "一部の"),
+            (r"全ての", "一部の"),
+            # タイミングの変更
+            (r"すぐに", "後で"),
+            (r"直ちに", "後で"),
+            (r"即座に", "後で"),
+            # 範囲の変更
+            (r"すべて", "一部"),
+            (r"全て", "一部"),
+            # 句点なしパターン
+            (r"確認する$", "確認を後回しにする"),
+            (r"連絡する$", "連絡を後回しにする"),
+            (r"報告する$", "報告を後回しにする"),
+            (r"実施する$", "実施を後回しにする"),
+            (r"実行する$", "実行を後回しにする"),
+            (r"処理する$", "処理を後回しにする"),
+            (r"対応する$", "対応を後回しにする"),
+            (r"対処する$", "対処を後回しにする"),
+            (r"行う$", "後回しにする"),
         ]
         
         for pattern, replacement in alternative_patterns:
@@ -96,29 +92,29 @@ def _convert_to_false_statement_with_fallback(original_statement: str) -> str:
                     logger.info(f"[FIXED_QUESTION] 代替方法で×問題を生成: パターン '{pattern}' を適用")
                     break
         
-        # 代替方法1-2: 文中の動詞も否定化（「疑う：」など）
+        # 代替方法1-2: 文中の動詞をより自然な誤りに変更（否定形は避ける）
         if false_statement == original_statement:
-            verb_negation_patterns = [
-                ("疑う：", "疑わない："),
-                ("疑う:", "疑わない:"),
-                ("確認する", "確認しない"),
-                ("連絡する", "連絡しない"),
-                ("報告する", "報告しない"),
-                ("実施する", "実施しない"),
-                ("実行する", "実行しない"),
-                ("処理する", "処理しない"),
-                ("対応する", "対応しない"),
-                ("対処する", "対処しない"),
-                ("示す", "示さない"),
-                ("持つ", "持たない"),
-                ("着用する", "着用しない"),
-                ("行う", "行わない"),
+            verb_modification_patterns = [
+                # 動作を「後回しにする」に変更
+                ("確認する", "確認を後回しにする"),
+                ("連絡する", "連絡を後回しにする"),
+                ("報告する", "報告を後回しにする"),
+                ("実施する", "実施を後回しにする"),
+                ("実行する", "実行を後回しにする"),
+                ("処理する", "処理を後回しにする"),
+                ("対応する", "対応を後回しにする"),
+                ("対処する", "対処を後回しにする"),
+                ("行う", "後回しにする"),
+                # 対象の変更
+                ("全員", "一部"),
+                ("すべての", "一部の"),
+                ("全ての", "一部の"),
             ]
-            for verb, negated_verb in verb_negation_patterns:
+            for verb, modified_verb in verb_modification_patterns:
                 if verb in original_statement:
-                    false_statement = original_statement.replace(verb, negated_verb, 1)  # 最初の1回だけ置換
+                    false_statement = original_statement.replace(verb, modified_verb, 1)  # 最初の1回だけ置換
                     if false_statement != original_statement:
-                        logger.info(f"[FIXED_QUESTION] 代替方法で×問題を生成: '{verb}'を'{negated_verb}'に変換")
+                        logger.info(f"[FIXED_QUESTION] 代替方法で×問題を生成: '{verb}'を'{modified_verb}'に変換")
                         break
         
         # 代替方法2: "必ず"を削除して「行わなくてもよい」に変換
@@ -191,22 +187,30 @@ def _convert_to_false_statement_with_fallback(original_statement: str) -> str:
                 if false_statement != original_statement:
                     logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '優先的に'を'優先的には'に変換")
         
-        # 代替方法8: それでも失敗した場合、文頭に「誤り：」を追加（最後の手段）
-        # ただし、この場合は文の内容自体も変更する必要がある
+        # 代替方法8: それでも失敗した場合、より自然な誤りを生成（最後の手段）
+        # 否定形は避け、動作を「後回しにする」に変更するなど、より自然な誤りを生成
         if false_statement == original_statement:
-            # 「誤り：」を追加するだけでなく、文の内容も変更する
-            # 例: 「疑う」→「疑わない」に変更
             modified_statement = original_statement
-            if "疑う" in modified_statement:
-                modified_statement = modified_statement.replace("疑う", "疑わない")
-            elif "行う" in modified_statement:
-                modified_statement = modified_statement.replace("行う", "行わない")
-            elif "確認する" in modified_statement:
-                modified_statement = modified_statement.replace("確認する", "確認しない")
+            # 動作を「後回しにする」に変更
+            if "確認する" in modified_statement:
+                modified_statement = modified_statement.replace("確認する", "確認を後回しにする")
             elif "連絡する" in modified_statement:
-                modified_statement = modified_statement.replace("連絡する", "連絡しない")
+                modified_statement = modified_statement.replace("連絡する", "連絡を後回しにする")
             elif "報告する" in modified_statement:
-                modified_statement = modified_statement.replace("報告する", "報告しない")
+                modified_statement = modified_statement.replace("報告する", "報告を後回しにする")
+            elif "対応する" in modified_statement:
+                modified_statement = modified_statement.replace("対応する", "対応を後回しにする")
+            elif "対処する" in modified_statement:
+                modified_statement = modified_statement.replace("対処する", "対処を後回しにする")
+            elif "行う" in modified_statement:
+                modified_statement = modified_statement.replace("行う", "後回しにする")
+            # 対象の変更
+            elif "全員" in modified_statement:
+                modified_statement = modified_statement.replace("全員", "一部")
+            elif "すべての" in modified_statement:
+                modified_statement = modified_statement.replace("すべての", "一部の")
+            elif "全ての" in modified_statement:
+                modified_statement = modified_statement.replace("全ての", "一部の")
             
             # 内容が変更された場合はそれを使用、変更されなかった場合は「誤り：」を追加
             if modified_statement != original_statement:
