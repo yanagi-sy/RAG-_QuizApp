@@ -96,6 +96,31 @@ def _convert_to_false_statement_with_fallback(original_statement: str) -> str:
                     logger.info(f"[FIXED_QUESTION] 代替方法で×問題を生成: パターン '{pattern}' を適用")
                     break
         
+        # 代替方法1-2: 文中の動詞も否定化（「疑う：」など）
+        if false_statement == original_statement:
+            verb_negation_patterns = [
+                ("疑う：", "疑わない："),
+                ("疑う:", "疑わない:"),
+                ("確認する", "確認しない"),
+                ("連絡する", "連絡しない"),
+                ("報告する", "報告しない"),
+                ("実施する", "実施しない"),
+                ("実行する", "実行しない"),
+                ("処理する", "処理しない"),
+                ("対応する", "対応しない"),
+                ("対処する", "対処しない"),
+                ("示す", "示さない"),
+                ("持つ", "持たない"),
+                ("着用する", "着用しない"),
+                ("行う", "行わない"),
+            ]
+            for verb, negated_verb in verb_negation_patterns:
+                if verb in original_statement:
+                    false_statement = original_statement.replace(verb, negated_verb, 1)  # 最初の1回だけ置換
+                    if false_statement != original_statement:
+                        logger.info(f"[FIXED_QUESTION] 代替方法で×問題を生成: '{verb}'を'{negated_verb}'に変換")
+                        break
+        
         # 代替方法2: "必ず"を削除して「行わなくてもよい」に変換
         if false_statement == original_statement and "必ず" in original_statement:
             false_statement = original_statement.replace("必ず", "").replace("  ", " ").strip()
@@ -136,10 +161,60 @@ def _convert_to_false_statement_with_fallback(original_statement: str) -> str:
                 if false_statement != original_statement:
                     logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: 'すべき'を'すべきではない'に変換")
         
-        # 代替方法5: それでも失敗した場合、文頭に「誤り：」を追加（最後の手段）
+        # 代替方法6: リスト形式の文の場合、一部の項目を削除または変更
         if false_statement == original_statement:
-            false_statement = f"誤り：{original_statement}"
-            logger.warning(f"[FIXED_QUESTION] すべての代替方法が失敗したため、文頭に「誤り：」を追加: '{false_statement[:50]}...'")
+            # 「：」で区切られたリスト形式の場合
+            if "：" in original_statement or ":" in original_statement:
+                # 「疑う：」→「疑わない：」に変換
+                if "疑う：" in original_statement:
+                    false_statement = original_statement.replace("疑う：", "疑わない：")
+                    if false_statement != original_statement:
+                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '疑う：'を'疑わない：'に変換")
+                elif "疑う:" in original_statement:
+                    false_statement = original_statement.replace("疑う:", "疑わない:")
+                    if false_statement != original_statement:
+                        logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '疑う:'を'疑わない:'に変換")
+                # リストの一部を削除（最後の項目を削除）
+                elif "、" in original_statement:
+                    parts = original_statement.split("、")
+                    if len(parts) > 1:
+                        # 最後の項目を削除
+                        false_statement = "、".join(parts[:-1]) + "。"
+                        if false_statement != original_statement:
+                            logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: リストの最後の項目を削除")
+        
+        # 代替方法7: それでも失敗した場合、文の内容を変更する
+        if false_statement == original_statement:
+            # 「優先的に」→「優先的には」に変更（意味を変える）
+            if "優先的に" in original_statement:
+                false_statement = original_statement.replace("優先的に", "優先的には")
+                if false_statement != original_statement:
+                    logger.info("[FIXED_QUESTION] 代替方法で×問題を生成: '優先的に'を'優先的には'に変換")
+        
+        # 代替方法8: それでも失敗した場合、文頭に「誤り：」を追加（最後の手段）
+        # ただし、この場合は文の内容自体も変更する必要がある
+        if false_statement == original_statement:
+            # 「誤り：」を追加するだけでなく、文の内容も変更する
+            # 例: 「疑う」→「疑わない」に変更
+            modified_statement = original_statement
+            if "疑う" in modified_statement:
+                modified_statement = modified_statement.replace("疑う", "疑わない")
+            elif "行う" in modified_statement:
+                modified_statement = modified_statement.replace("行う", "行わない")
+            elif "確認する" in modified_statement:
+                modified_statement = modified_statement.replace("確認する", "確認しない")
+            elif "連絡する" in modified_statement:
+                modified_statement = modified_statement.replace("連絡する", "連絡しない")
+            elif "報告する" in modified_statement:
+                modified_statement = modified_statement.replace("報告する", "報告しない")
+            
+            # 内容が変更された場合はそれを使用、変更されなかった場合は「誤り：」を追加
+            if modified_statement != original_statement:
+                false_statement = modified_statement
+                logger.info(f"[FIXED_QUESTION] 代替方法で×問題を生成: 文の内容を変更: '{original_statement[:50]}...' -> '{false_statement[:50]}...'")
+            else:
+                false_statement = f"誤り：{original_statement}"
+                logger.warning(f"[FIXED_QUESTION] すべての代替方法が失敗したため、文頭に「誤り：」を追加: '{false_statement[:50]}...'")
     
     # 【重要】最終チェック: 変換後の文が元の文と異なることを確認
     # 同じ場合は、必ず誤った内容になるように強制的に変換
