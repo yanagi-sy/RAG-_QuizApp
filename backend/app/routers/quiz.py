@@ -5,7 +5,11 @@ Quiz APIルーター（クイズ生成・保存・一覧のエンドポイント
 - POST /quiz: ダミー出題（旧仕様）
 - POST /quiz/generate: 教材サンプリングで根拠を取得し、LLMで○×問題を生成
 - GET/POST/DELETE /quiz/sets: 生成したクイズセットの保存・一覧・取得・削除
-- source_ids は1件必須。規定数に達しない場合は422でdebug付きエラーを返す
+- 【新仕様】source_idsが未指定の場合、難易度から自動的にマニュアルを選択
+  - 初級（beginner）→ 新人用マニュアル.pdf
+  - 中級（intermediate）→ ベテランスタッフ用マニュアル.pdf
+  - 上級（advanced）→ 店舗責任者用マニュアル.pdf
+- 規定数に達しない場合は422でdebug付きエラーを返す
 """
 import asyncio
 import logging
@@ -34,6 +38,39 @@ from app.quiz import store as quiz_store
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# 【難易度→マニュアルのマッピング】
+# 各難易度に対応するマニュアルファイルを定義
+# 初級: 新人用マニュアル.pdf
+# 中級: ベテランスタッフ用マニュアル.pdf
+# 上級: 店舗責任者用マニュアル.pdf
+LEVEL_TO_SOURCE_MAPPING = {
+    "beginner": "新人用マニュアル.pdf",
+    "intermediate": "ベテランスタッフ用マニュアル.pdf",
+    "advanced": "店舗責任者用マニュアル.pdf",
+}
+
+
+def get_source_id_from_level(level: str) -> str:
+    """
+    難易度から対応するsource_idを取得
+    
+    【初心者向け】
+    難易度（beginner/intermediate/advanced）に応じて、自動的に対応するマニュアルファイルを選択します。
+    これにより、ユーザーは難易度を選択するだけで、適切なマニュアルからクイズが生成されます。
+    
+    Args:
+        level: 難易度（beginner/intermediate/advanced）
+        
+    Returns:
+        対応するマニュアルファイル名（source_id）
+        
+    Raises:
+        ValueError: 無効な難易度が指定された場合
+    """
+    if level not in LEVEL_TO_SOURCE_MAPPING:
+        raise ValueError(f"無効な難易度: {level}")
+    return LEVEL_TO_SOURCE_MAPPING[level]
 
 
 @router.post("", response_model=QuizResponse)
@@ -73,21 +110,28 @@ async def generate_quizzes_endpoint(request: QuizGenerateRequest) -> QuizGenerat
     検索ではなく「教材からサンプリングして出題」する。
     全資料 / 任意の単独資料 / 全難易度で必ず count 件生成できる。
     
-    **品質担保のため、source_idsは必ず1件を指定してください。**
+    **【新仕様】source_idsが未指定の場合、難易度から自動的にマニュアルを選択します。**
+    - 初級（beginner）→ 新人用マニュアル.pdf
+    - 中級（intermediate）→ ベテランスタッフ用マニュアル.pdf
+    - 上級（advanced）→ 店舗責任者用マニュアル.pdf
     
     Args:
-        request: クイズ生成リクエスト
+        request: クイズ生成リクエスト（source_idsは省略可能）
         
     Returns:
         生成されたクイズのリスト
     """
-    # 【品質担保】source_idsの検証：必ず1件を要求
+    # 【新仕様】source_idsが未指定の場合、難易度から自動的に決定
+    # 難易度に応じて対応するマニュアルファイルを自動選択
     if request.source_ids is None or len(request.source_ids) == 0:
-        raise HTTPException(
-            status_code=400,
-            detail="source_idsは必須です。単一ソースを1件指定してください。"
+        # 難易度から対応するsource_idを自動取得
+        auto_source_id = get_source_id_from_level(request.level)
+        request.source_ids = [auto_source_id]
+        logger.info(
+            f"[QUIZ_GENERATE] source_idsが未指定のため、難易度 '{request.level}' から自動選択: {auto_source_id}"
         )
     
+    # 【品質担保】source_idsは1件のみ許可
     if len(request.source_ids) >= 2:
         raise HTTPException(
             status_code=400,

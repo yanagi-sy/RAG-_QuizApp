@@ -8,7 +8,6 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
-  getAvailableSources,
   generateQuizSet,
   listQuizSets,
   getQuizSet,
@@ -44,11 +43,9 @@ export default function QuizPage() {
   const [activeTab, setActiveTab] = useState<Tab>("generate");
 
   // クイズ生成用の状態
-  const [sources, setSources] = useState<string[]>([]);
-  const [selectedSource, setSelectedSource] = useState<string | null>(null);
+  // 【新仕様】ファイル選択は不要。難易度に応じて自動的にマニュアルが選択される
   const [level, setLevel] = useState<Level>("beginner");
   const [loadingGenerate, setLoadingGenerate] = useState(false);
-  const [loadingSources, setLoadingSources] = useState(true);
   const [generateError, setGenerateError] = useState<ApiError | null>(null);
 
   // クイズ管理用の状態
@@ -60,25 +57,8 @@ export default function QuizPage() {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [manageError, setManageError] = useState<ApiError | null>(null);
 
-  // ソースファイルのリストを取得
-  useEffect(() => {
-    if (activeTab === "generate") {
-      const fetchSources = async () => {
-        try {
-          setLoadingSources(true);
-          const sourcesList = await getAvailableSources();
-          setSources(sourcesList);
-        } catch (err) {
-          const apiError = toApiError(err);
-          setGenerateError(apiError);
-        } finally {
-          setLoadingSources(false);
-        }
-      };
-
-      fetchSources();
-    }
-  }, [activeTab]);
+  // 【新仕様】ファイル選択は不要のため、ソースファイルの取得処理を削除
+  // 難易度に応じて自動的にマニュアルが選択される
 
   // クイズセットのリストを取得
   useEffect(() => {
@@ -102,24 +82,14 @@ export default function QuizPage() {
 
   // クイズ生成
   const handleGenerate = async () => {
-    // 【品質担保】単一ソースが選択されていることを確認
-    if (!selectedSource) {
-      setGenerateError(
-        new ApiError(
-          "INVALID_INPUT",
-          "ファイルを1件選択してください。"
-        )
-      );
-      return;
-    }
-
+    // 【新仕様】source_idsは未指定でOK。バックエンドで難易度から自動選択される
     setLoadingGenerate(true);
     setGenerateError(null);
 
     try {
       const result = await generateQuizSet(
         level,
-        [selectedSource] // 単一ソースを配列で渡す
+        undefined // source_idsは未指定（難易度から自動選択）
       );
 
       if (result.quizzes && result.quizzes.length > 0) {
@@ -153,10 +123,7 @@ export default function QuizPage() {
     }
   };
 
-  // ソース選択（単一選択）
-  const selectSource = (source: string) => {
-    setSelectedSource(source);
-  };
+  // 【新仕様】ソース選択機能は削除（難易度から自動選択）
 
   // クイズセットの詳細を取得
   const handleViewDetail = async (id: string) => {
@@ -264,54 +231,19 @@ export default function QuizPage() {
         {/* クイズ生成タブ */}
         {activeTab === "generate" && (
           <div className="space-y-6">
-            {/* ファイル選択 */}
-            <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-4 sm:p-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                ファイル選択（必須）
-              </h2>
-              {loadingSources ? (
-                <div className="text-sm text-gray-500">読み込み中...</div>
-              ) : sources.length === 0 ? (
-                <div className="text-sm text-gray-500">
-                  利用可能なファイルがありません。
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="text-sm text-gray-700">
-                    1件のファイルを選択してください
-                  </div>
-                  <div className="space-y-2 max-h-64 overflow-y-auto">
-                    {sources.map((source) => (
-                      <label
-                        key={source}
-                        className="flex items-center space-x-3 p-3 rounded-lg hover:bg-gray-50 cursor-pointer border border-transparent hover:border-gray-200 transition-colors"
-                      >
-                        <input
-                          type="radio"
-                          name="source"
-                          value={source}
-                          checked={selectedSource === source}
-                          onChange={() => selectSource(source)}
-                          className="w-4 h-4 text-blue-600 border-gray-300 focus:ring-blue-500"
-                        />
-                        <span className="text-sm text-gray-900">{source}</span>
-                      </label>
-                    ))}
-                  </div>
-                  {!selectedSource && (
-                    <p className="text-xs text-red-600">
-                      ※ ファイルを1件選択してください
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-
             {/* 難易度選択 */}
             <div className="bg-white border border-gray-200 rounded-2xl shadow-sm p-4 sm:p-6">
               <h2 className="text-lg font-semibold text-gray-900 mb-4">
                 難易度選択
               </h2>
+              <div className="mb-4 text-sm text-gray-600">
+                <p className="mb-2">難易度に応じて、以下のマニュアルから自動的にクイズが生成されます：</p>
+                <ul className="list-disc list-inside space-y-1 ml-2">
+                  <li>初級: 新人用マニュアル.pdf</li>
+                  <li>中級: ベテランスタッフ用マニュアル.pdf</li>
+                  <li>上級: 店舗責任者用マニュアル.pdf</li>
+                </ul>
+              </div>
               <div className="grid grid-cols-3 gap-4">
                 {(
                   [
@@ -346,7 +278,7 @@ export default function QuizPage() {
             <div className="flex justify-end">
               <button
                 onClick={handleGenerate}
-                disabled={loadingGenerate || loadingSources || !selectedSource}
+                disabled={loadingGenerate}
                 className="h-12 min-w-[140px] rounded-xl bg-blue-600 px-6 text-base font-medium text-white hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
               >
                 {loadingGenerate ? "生成中..." : "生成"}
